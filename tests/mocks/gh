@@ -35,6 +35,22 @@ case "$1" in
             fi
         elif [[ "$2" == "view" ]]; then
             run_id="$3"
+            # A --log-failed call wants log TEXT, never the run JSON. Answer
+            # per job from MOCK_JOB_LOG_<id>, else nothing to show.
+            if [[ "$*" == *--log-failed* ]]; then
+                job_id=""
+                for ((i = 1; i <= $#; i++)); do
+                    if [[ "${!i}" == "--job" ]]; then
+                        next=$((i + 1))
+                        job_id="${!next}"
+                    fi
+                done
+                job_var="MOCK_JOB_LOG_${job_id}"
+                if [[ -n "${!job_var:-}" ]]; then
+                    echo "${!job_var}"
+                fi
+                exit 0
+            fi
             # Check for run-specific mock
             var_name="MOCK_RUN_VIEW_${run_id}"
             if [[ -n "${!var_name:-}" ]]; then

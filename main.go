@@ -97,6 +97,38 @@ func checkGitRepo() error {
 	return nil
 }
 
+func getRepoFromRemote() (string, error) {
+	// Try to parse origin remote URL directly (preferred - avoids gh repo view picking wrong remote)
+	remoteURL, err := runCommand("git", "remote", "get-url", "origin")
+	if err == nil {
+		// Handle SSH format: git@github.com:owner/repo.git
+		if strings.HasPrefix(remoteURL, "git@github.com:") {
+			repo := strings.TrimPrefix(remoteURL, "git@github.com:")
+			repo = strings.TrimSuffix(repo, ".git")
+			return repo, nil
+		}
+
+		// Handle HTTPS format: https://github.com/owner/repo.git
+		if strings.HasPrefix(remoteURL, "https://github.com/") {
+			repo := strings.TrimPrefix(remoteURL, "https://github.com/")
+			repo = strings.TrimSuffix(repo, ".git")
+			return repo, nil
+		}
+	}
+
+	// Fall back to gh repo view
+	repoJSON, err := runCommand("gh", "repo", "view", "--json", "nameWithOwner")
+	if err != nil {
+		return "", fmt.Errorf("could not determine repository")
+	}
+
+	var repoInfo RepoInfo
+	if err := json.Unmarshal([]byte(repoJSON), &repoInfo); err != nil {
+		return "", fmt.Errorf("could not parse repo info: %w", err)
+	}
+	return repoInfo.NameWithOwner, nil
+}
+
 func checkPushed() error {
 	unpushed, err := runCommand("git", "log", "@{u}..HEAD", "--oneline")
 	if err != nil {
@@ -132,16 +164,11 @@ func getContext() (*Context, error) {
 	}
 	ctx.Branch = branch
 
-	repoJSON, err := runCommand("gh", "repo", "view", "--json", "nameWithOwner")
+	repo, err := getRepoFromRemote()
 	if err != nil {
-		return nil, fmt.Errorf("could not determine GitHub repository")
+		return nil, fmt.Errorf("could not determine GitHub repository: %w", err)
 	}
-
-	var repoInfo RepoInfo
-	if err := json.Unmarshal([]byte(repoJSON), &repoInfo); err != nil {
-		return nil, fmt.Errorf("could not parse repo info: %w", err)
-	}
-	ctx.Repo = repoInfo.NameWithOwner
+	ctx.Repo = repo
 
 	ctx.CommitURL = fmt.Sprintf("https://github.com/%s/commit/%s", ctx.Repo, ctx.Commit)
 
@@ -345,6 +372,7 @@ func showResults(runIDs []int, ctx *Context) bool {
 		fmt.Println()
 
 		printInfo("Jobs:")
+		var failedJobs []Job
 		for _, job := range detail.Jobs {
 			var icon string
 			switch job.Conclusion {
@@ -359,18 +387,28 @@ func showResults(runIDs []int, ctx *Context) bool {
 			}
 
 			if job.Conclusion == "failure" {
-				fmt.Printf("  %s %s  →  gh run view --log --job %d\n", icon, job.Name, job.DatabaseID)
-			} else {
-				fmt.Printf("  %s %s\n", icon, job.Name)
+				failedJobs = append(failedJobs, job)
 			}
+			fmt.Printf("  %s %s\n", icon, job.Name)
 		}
 		fmt.Println()
+
+		// The failure itself, not a command that would show it.
+		for _, job := range failedJobs {
+			excerpt := jobFailureLog(runID, job.DatabaseID)
+			if excerpt == "" {
+				continue
+			}
+			printError(fmt.Sprintf("❌ %s", job.Name))
+			fmt.Println(excerpt)
+			fmt.Println()
+		}
 
 		fmt.Printf("     Run:  %s\n", detail.URL)
 
 		if detail.Conclusion != "success" {
 			fmt.Println()
-			printWarn("View all failed logs:")
+			printWarn("Full logs:")
 			fmt.Printf("  gh run view %d --log-failed\n", runID)
 			fmt.Println()
 		}
@@ -384,6 +422,47 @@ func showResults(runIDs []int, ctx *Context) bool {
 	fmt.Println()
 
 	return allSuccess
+}
+
+// errorLineMarkers are what a runner puts in front of the line that actually
+// failed. A job log is tens of thousands of lines and the failure is a handful
+// of them, so printing the whole thing is the same as printing none of it.
+var errorLineMarkers = []string{"##[error]", "FAIL", "Error:", "error:", "panic:"}
+
+// maxLogLines bounds one job's excerpt. A wall of output scrolls the summary --
+// the run and job links below it are what a longer read starts from.
+const maxLogLines = 40
+
+// jobFailureLog returns the failing steps' output for one job, trimmed to the
+// lines that carry the error. Printing this is the whole point: a reader who
+// has to run a second command to see WHY a build failed will reach for the raw
+// API and hand-roll a poll loop around it.
+func jobFailureLog(runID, jobID int) string {
+	out, err := runCommand("gh", "run", "view", strconv.Itoa(runID), "--log-failed", "--job", strconv.Itoa(jobID))
+	if err != nil || strings.TrimSpace(out) == "" {
+		return ""
+	}
+
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	var errorLines []string
+	for _, line := range lines {
+		for _, marker := range errorLineMarkers {
+			if strings.Contains(line, marker) {
+				errorLines = append(errorLines, line)
+				break
+			}
+		}
+	}
+
+	// No marker matched, so the failure is shaped in a way this does not know:
+	// fall back to the tail, where a build that died usually says why.
+	if len(errorLines) == 0 {
+		errorLines = lines
+	}
+	if len(errorLines) > maxLogLines {
+		errorLines = errorLines[len(errorLines)-maxLogLines:]
+	}
+	return strings.Join(errorLines, "\n")
 }
 
 func main() {
