@@ -11,6 +11,28 @@ import (
 
 const logTS = "2026-06-01T02:05:01.1234567Z "
 
+// The status column holds an emoji: three bytes wide, two terminal columns.
+// Measuring bytes shifts every row after it, which is what this pins.
+func TestRenderTableAlignsAnEmojiStatusColumn(t *testing.T) {
+	out := renderTable(
+		[]string{"", "RUN-ID", "STATE"},
+		[][]string{{"✅", "1", "success"}, {"❌", "22", "failure"}},
+	)
+	assert.Equal(t, ""+
+		"    RUN-ID  STATE\n"+
+		"✅  1       success\n"+
+		"❌  22      failure\n", out)
+}
+
+// A colored cell is as wide as its text: the escape occupies no column.
+func TestRenderTableIgnoresANSIWidth(t *testing.T) {
+	out := renderTable(nil, [][]string{
+		{colorRed + "bad" + colorReset, "x"},
+		{"ok", "y"},
+	})
+	assert.Equal(t, colorRed+"bad"+colorReset+"  x\nok   y\n", out)
+}
+
 func TestRenderLogLineCleansByDefaultAndKeepsEverythingWithRaw(t *testing.T) {
 	out, ok := renderLogLine(logTS+"##[error]boom", false, false)
 	require.True(t, ok)

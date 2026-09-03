@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/wow-look-at-my/api-cli/fields"
 )
 
 // ansiRe matches an ANSI SGR escape, so --plain can strip both the colors this
@@ -127,33 +129,22 @@ func humanSize(n int64) string {
 }
 
 // printTable prints rows in aligned columns. Every row must have as many cells
-// as the header.
+// as the header. The status column holds an emoji, which is two terminal
+// columns wide and three bytes long, so the aligner measures display width
+// rather than length.
 func printTable(header []string, rows [][]string) {
-	widths := make([]int, len(header))
-	for i, h := range header {
-		widths[i] = len(stripANSI(h))
-	}
-	for _, r := range rows {
-		for i, cell := range r {
-			if i < len(widths) && len(stripANSI(cell)) > widths[i] {
-				widths[i] = len(stripANSI(cell))
-			}
-		}
-	}
-	line := func(cells []string) {
-		var b strings.Builder
-		for i, cell := range cells {
-			b.WriteString(cell)
-			if i < len(cells)-1 {
-				b.WriteString(strings.Repeat(" ", widths[i]-len(stripANSI(cell))+2))
-			}
-		}
-		fmt.Println(strings.TrimRight(b.String(), " "))
-	}
+	fmt.Print(renderTable(header, rows))
+}
+
+// renderTable is printTable's output, returned rather than printed, so a test
+// reads it without taking over stdout.
+func renderTable(header []string, rows [][]string) string {
+	lines := make([]string, 0, len(rows)+1)
 	if len(header) > 0 {
-		line(header)
+		lines = append(lines, strings.Join(header, "\t"))
 	}
 	for _, r := range rows {
-		line(r)
+		lines = append(lines, strings.Join(r, "\t"))
 	}
+	return fields.AlignColumns(lines, 2)
 }
