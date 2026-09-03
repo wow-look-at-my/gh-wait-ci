@@ -77,18 +77,26 @@ func resolveCommit(repo, sha string) string {
 
 // resolveTarget picks the run a subcommand acts on and loads its jobs.
 func resolveTarget(sel selector) (*target, error) {
+	// The run ID is checked before anything reaches the network, so a typo is
+	// reported as the typo it is rather than as whatever the repository lookup
+	// happens to fail with.
+	var wantRun int64
+	if sel.RunID != "" {
+		id, err := strconv.ParseInt(strings.TrimSpace(sel.RunID), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid run ID %q: a run ID is a number, as printed by `gh wait-ci runs`", sel.RunID)
+		}
+		wantRun = id
+	}
+
 	repo, err := resolveRepo()
 	if err != nil {
 		return nil, err
 	}
 
 	var run *apiRun
-	if sel.RunID != "" {
-		id, err := strconv.ParseInt(strings.TrimSpace(sel.RunID), 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid run ID %q: a run ID is a number, as printed by `gh wait-ci runs`", sel.RunID)
-		}
-		run, err = fetchRun(repo, id)
+	if wantRun != 0 {
+		run, err = fetchRun(repo, wantRun)
 		if err != nil {
 			return nil, err
 		}
