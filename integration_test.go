@@ -167,6 +167,7 @@ func TestLogNarrowsByJobAndTail(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "══ test")
 	assert.NotContains(t, out, "══ build")
+	assert.NotContains(t, out, "\x1b[", "--plain must strip the header's color too")
 
 	out, err = runCLI(t, "log", "12345", "--job", "222", "--tail", "1", "--plain", "--no-headers")
 	require.NoError(t, err)

@@ -234,7 +234,13 @@ func newLogCmd() *cobra.Command {
 			tail, _ := cmd.Flags().GetInt("tail")
 
 			if !haveSteps && opt.Step == "" && !noHeaders {
-				printWarn("Step-level logs need a finished run; showing whole-job logs.")
+				// On stderr, so piping stdout onward carries log text and nothing else.
+				note := "Step-level logs need a finished run; showing whole-job logs."
+				if plain {
+					fmt.Fprintln(os.Stderr, note)
+				} else {
+					fmt.Fprintf(os.Stderr, "%s%s%s\n", colorYellow, note, colorReset)
+				}
 			}
 
 			for _, s := range sections {
@@ -243,7 +249,12 @@ func newLogCmd() *cobra.Command {
 					lines = lines[len(lines)-tail:]
 				}
 				if !noHeaders {
-					fmt.Printf("\n%s══ %s%s\n", colorBlue, s.Label(), colorReset)
+					// --plain promises no escapes at all, headers included.
+					if plain {
+						fmt.Printf("\n══ %s\n", s.Label())
+					} else {
+						fmt.Printf("\n%s══ %s%s\n", colorBlue, s.Label(), colorReset)
+					}
 				}
 				for _, line := range lines {
 					out, ok := renderLogLine(line, raw, plain)
