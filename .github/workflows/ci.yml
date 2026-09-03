@@ -19,9 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # go-toolchain's bootstrap probes the org build cache and refuses to run
-      # without GO_BUILDCACHE_CONFIG. secret-server vends it against this
-      # workflow's OIDC identity, so no repository secret is involved.
+      # Vends GO_BUILDCACHE_CONFIG, without which go-toolchain refuses to start.
       - uses: wow-look-at-my/actions@secret-server#latest
 
       - uses: wow-look-at-my/go-toolchain@master
@@ -29,7 +27,6 @@ jobs:
       - name: Install bats
         run: sudo apt-get install -y bats
 
-      # The bats suite drives the built binary through the same stub `gh` the Go
-      # suite uses, so the shipped artifact is exercised as a user runs it.
+      # Drives the built binary, so the shipped artifact is exercised as a user runs it.
       - name: End-to-end tests
         run: bats tests/
