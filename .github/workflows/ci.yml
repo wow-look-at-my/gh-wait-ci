@@ -5,25 +5,26 @@ on:
     branches: ['**']
   workflow_dispatch:
 
+permissions:
+  id-token: write
+  contents: write
+  actions: read
+  checks: read
+  deployments: write
+  artifact-metadata: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
+      # go-toolchain's bootstrap probes the org build cache and refuses to run
+      # without GO_BUILDCACHE_CONFIG. secret-server vends it against this
+      # workflow's OIDC identity, so no repository secret is involved.
+      - uses: wow-look-at-my/actions@secret-server#latest
 
-      # Plain go, not go-toolchain: its bootstrap requires the org's
-      # GO_BUILDCACHE_CONFIG, which this repository has no way to obtain, and it
-      # fails its integrity probe without it. Run go-toolchain locally for the
-      # vet pass and the coverage gate; CI gates the suite itself.
-      - name: Test
-        run: go test ./...
-
-      - name: Build
-        run: go build -o build/gh-wait-ci .
+      - uses: wow-look-at-my/go-toolchain@master
 
       - name: Install bats
         run: sudo apt-get install -y bats
