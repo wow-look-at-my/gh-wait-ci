@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -304,23 +305,72 @@ func getPRInfo(ctx *Context) {
 	ctx.PRURL = prInfo.URL
 }
 
-func main() {
+// newRootCmd assembles the whole command tree.
+func newRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "gh-wait-ci [run-id]",
-		Short: "Wait for GitHub Actions CI to complete and report results",
-		Long:  "Wait for GitHub Actions CI to complete and report results.\nIf no run-id provided, waits for ALL runs for the current commit.",
-		Args:  cobra.MaximumNArgs(1),
-		SilenceUsage: true,
-		RunE:         run,
+		Short: "Wait for GitHub Actions CI, and read or query its logs",
+		Long: "Wait for GitHub Actions CI to complete and report results.\n" +
+			"If no run-id is provided, waits for ALL runs for the current commit.\n\n" +
+			"The subcommands cover the rest of the Actions surface, so nothing here\n" +
+			"needs `gh run`:\n" +
+			"  runs         list workflow runs\n" +
+			"  view         a run's jobs, steps and timings\n" +
+			"  jobs         a run's jobs with their IDs\n" +
+			"  log          print logs, filtered by job, step or outcome\n" +
+			"  grep         search logs for a pattern\n" +
+			"  annotations  the errors and warnings that never reach the logs\n" +
+			"  artifacts    list and download a run's artifacts\n" +
+			"  workflows    the repository's workflow definitions\n" +
+			"  cancel       cancel a run\n" +
+			"  rerun        re-run a run, its failed jobs, or one job",
+		Args:          cobra.MaximumNArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE:          run,
 	}
 
 	rootCmd.Flags().BoolP("fail-fast", "", false, "Exit immediately when any job fails")
-	rootCmd.Flags().StringVarP(&repoFlag, "repo", "R", "", "Target repository in [HOST/]OWNER/REPO format")
+	rootCmd.PersistentFlags().StringVarP(&repoFlag, "repo", "R", "", "Target repository in [HOST/]OWNER/REPO format")
 	rootCmd.Flags().StringP("sha", "s", "", "Commit SHA to watch (full or partial)")
 	rootCmd.Flags().BoolP("logs", "l", false, "Stream job logs live as they run, instead of a status summary")
 	rootCmd.Flags().IntP("interval", "i", 5, "Polling interval in seconds")
 
-	if rootCmd.Execute() != nil {
+	watchCmd := &cobra.Command{
+		Use:   "watch [run-id]",
+		Short: "Wait for CI to finish (the same thing the bare command does)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE:  run,
+	}
+	watchCmd.Flags().BoolP("fail-fast", "", false, "Exit immediately when any job fails")
+	watchCmd.Flags().StringP("sha", "s", "", "Commit SHA to watch (full or partial)")
+	watchCmd.Flags().BoolP("logs", "l", false, "Stream job logs live as they run, instead of a status summary")
+	watchCmd.Flags().IntP("interval", "i", 5, "Polling interval in seconds")
+
+	rootCmd.AddCommand(
+		watchCmd,
+		newRunsCmd(),
+		newViewCmd(),
+		newJobsCmd(),
+		newLogCmd(),
+		newGrepCmd(),
+		newAnnotationsCmd(),
+		newArtifactsCmd(),
+		newWorkflowsCmd(),
+		newCancelCmd(),
+		newRerunCmd(),
+	)
+	return rootCmd
+}
+
+func main() {
+	if err := newRootCmd().Execute(); err != nil {
+		// A silent error carries an exit code and nothing to say: `grep` uses it
+		// to exit non-zero on no match, the way grep itself does.
+		var silent *silentError
+		if !errors.As(err, &silent) {
+			printError(err.Error())
+		}
 		os.Exit(1)
 	}
 }

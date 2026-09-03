@@ -56,11 +56,60 @@ case "$1" in
         fi
         ;;
     api)
-        endpoint="$2"
+        # `gh api` takes flags before the endpoint (--method POST ...), so the
+        # endpoint is the first argument that is not a flag or a flag value.
+        shift
+        method="GET"
+        endpoint=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --method|-X) method="$2"; shift 2 ;;
+                -*) shift ;;
+                *) endpoint="$1"; shift ;;
+            esac
+        done
+
+        if [[ "$method" == "POST" ]]; then
+            # cancel / rerun return an empty body on success.
+            echo "${MOCK_API_POST_JSON:-}"
+            exit "${MOCK_API_POST_EXIT:-0}"
+        fi
+
+        # Strip the query string; the mock keys off the path alone.
+        endpoint="${endpoint%%\?*}"
+
         if [[ "$endpoint" == repos/*/actions/jobs/*/logs ]]; then
-            # Plain-text job log (used by --logs streaming mode).
+            # Plain-text job log (used by --logs streaming mode and `log`).
             # MOCK_JOB_LOG provides the body; absent => empty (no logs yet).
             printf '%s' "${MOCK_JOB_LOG:-}"
+        elif [[ "$endpoint" == repos/*/actions/runs/*/logs ]]; then
+            # The whole-run archive exists only once a run has finished. The
+            # default here is the in-progress answer, which is what makes the
+            # per-job fallback the path under test.
+            if [[ -n "${MOCK_RUN_LOG_ZIP:-}" ]]; then
+                exec cat "$MOCK_RUN_LOG_ZIP"
+            fi
+            echo "gh: Not Found (HTTP 404)" >&2
+            exit 1
+        elif [[ "$endpoint" == repos/*/actions/runs/*/jobs ]] || [[ "$endpoint" == repos/*/attempts/*/jobs ]]; then
+            # A ${VAR:-{...}} default would end at the first brace of the JSON,
+            # so every default below is assigned on its own line instead.
+            body='{"jobs": []}'
+            echo "${MOCK_API_JOBS_JSON:-$body}"
+        elif [[ "$endpoint" == repos/*/actions/runs/*/artifacts ]]; then
+            body='{"artifacts": []}'
+            echo "${MOCK_API_ARTIFACTS_JSON:-$body}"
+        elif [[ "$endpoint" == repos/*/actions/runs ]] || [[ "$endpoint" == repos/*/actions/workflows/*/runs ]]; then
+            body='{"workflow_runs": []}'
+            echo "${MOCK_API_RUNS_JSON:-$body}"
+        elif [[ "$endpoint" == repos/*/actions/runs/* ]]; then
+            body='{"id": 12345, "name": "CI", "status": "completed", "conclusion": "success"}'
+            echo "${MOCK_API_RUN_JSON:-$body}"
+        elif [[ "$endpoint" == repos/*/actions/workflows ]]; then
+            body='{"workflows": []}'
+            echo "${MOCK_API_WORKFLOWS_JSON:-$body}"
+        elif [[ "$endpoint" == repos/*/check-runs/*/annotations ]]; then
+            echo "${MOCK_API_ANNOTATIONS_JSON:-[]}"
         elif [[ "$endpoint" == repos/*/commits/* ]]; then
             if [[ -n "${MOCK_API_COMMITS_JSON:-}" ]]; then
                 echo "$MOCK_API_COMMITS_JSON"

@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: ['**']
   workflow_dispatch:
 
 jobs:
@@ -10,15 +11,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
+      # go-toolchain vets, runs the Go suite under its coverage gate, and builds
+      # the binary into build/. It is self-bootstrapping, so no setup-go step.
+      - name: Install go-toolchain
+        run: |
+          curl -fL --compressed "https://dl.pazer.build/go-toolchain?os=linux&arch=amd64" \
+            -o /usr/local/bin/go-toolchain
+          chmod +x /usr/local/bin/go-toolchain
 
-      - name: Build
-        run: go build -o gh-wait-ci .
+      - name: Build and test
+        run: go-toolchain
 
       - name: Install bats
         run: sudo apt-get install -y bats
 
-      - name: Run tests
+      # The bats suite drives the built binary through the same stub `gh` the Go
+      # suite uses, so the shipped artifact is exercised as a user runs it.
+      - name: End-to-end tests
         run: bats tests/

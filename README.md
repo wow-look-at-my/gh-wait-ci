@@ -1,6 +1,11 @@
 # gh-wait-ci
 
-A GitHub CLI extension to wait for CI to complete without polling spam.
+A GitHub CLI extension to wait for CI to complete without polling spam, and to
+read and search everything a run produced.
+
+It covers the whole `gh run` surface, so a repository or agent can ban
+`gh run *` outright and lose nothing. See
+[Replacing `gh run`](#replacing-gh-run) for the command-by-command mapping.
 
 ## Installation
 
@@ -45,6 +50,90 @@ gh wait-ci --logs --interval 3
 | `--fail-fast` | Exit immediately when any job fails |
 | `-s`, `--sha` | Commit SHA to watch (full or partial) |
 | `-R`, `--repo` | Target repository in `[HOST/]OWNER/REPO` format |
+
+## Reading and querying logs
+
+```bash
+# Everything a run logged
+gh wait-ci log
+
+# Only what failed, which is almost always the question
+gh wait-ci log --failed
+
+# One job, or one step of it
+gh wait-ci log --job test
+gh wait-ci log --job test --step "Run tests"
+
+# The last 50 lines of each section, with no headers, for piping onward
+gh wait-ci log --tail 50 --no-headers --plain
+
+# Search, with grep's flags and grep's exit codes
+gh wait-ci grep 'panic:'
+gh wait-ci grep -i -C 3 'permission denied' --failed
+gh wait-ci grep -F 'exit status 1' --count
+gh wait-ci grep 'FAIL' --json | jq -r '.[].text'
+```
+
+`log` and `grep` both accept a run ID, `--sha`, `--workflow` and `--attempt` to
+pick which run they read, and default to the run for the commit checked out.
+
+Matching runs against the CLEANED text, so a pattern never has to allow for the
+RFC3339 timestamp GitHub prefixes onto every line, nor for the `##[error]`
+markers it wraps output in. Pass `--raw` to `log` to see the bytes as stored.
+
+### Step-level output needs a finished run
+
+A job's own log is downloadable the moment that job completes, so `log --job`
+works while the rest of a run is still going. The archive that carries STEP
+boundaries is published only once the whole run finishes, so `--step` reports
+that plainly rather than guessing at boundaries.
+
+### Annotations are not in the logs
+
+`gh wait-ci annotations` shows the file-and-line errors and warnings GitHub
+renders at the top of a run page. A workflow produces these separately, so
+reading the logs alone can miss the one line that explains a failure.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `gh wait-ci` | Wait for every run on the current commit, then report |
+| `gh wait-ci watch` | The same thing, named |
+| `gh wait-ci runs` | List workflow runs, with branch/event/status/actor/commit filters |
+| `gh wait-ci view` | A run's summary, jobs, steps and timings |
+| `gh wait-ci jobs` | A run's jobs with their IDs, states, durations and runners |
+| `gh wait-ci log` | Print logs, filtered by job, step or outcome |
+| `gh wait-ci grep` | Search logs for a pattern |
+| `gh wait-ci annotations` | The errors and warnings that never reach the logs |
+| `gh wait-ci artifacts` | List a run's artifacts, and download them |
+| `gh wait-ci workflows` | The repository's workflow definitions |
+| `gh wait-ci cancel` | Cancel a run |
+| `gh wait-ci rerun` | Re-run a run, its failed jobs, or one job |
+
+Every query command takes `--json`, so a script consumes it without parsing the
+human table.
+
+## Replacing `gh run`
+
+| Instead of | Use |
+| --- | --- |
+| `gh run list` | `gh wait-ci runs` |
+| `gh run list --branch X --workflow ci.yml` | `gh wait-ci runs --branch X --workflow ci.yml` |
+| `gh run view <id>` | `gh wait-ci view <id>` |
+| `gh run view <id> --json jobs` | `gh wait-ci view <id> --json` |
+| `gh run view <id> --log` | `gh wait-ci log <id>` |
+| `gh run view <id> --log-failed` | `gh wait-ci log <id> --failed` |
+| `gh run view --log --job <job-id>` | `gh wait-ci log --job <job-id>` |
+| `gh run view <id> --log \| grep X` | `gh wait-ci grep X <id>` |
+| `gh run watch <id>` | `gh wait-ci <id>` |
+| `gh run download <id>` | `gh wait-ci artifacts <id> --download all` |
+| `gh run cancel <id>` | `gh wait-ci cancel <id>` |
+| `gh run rerun <id> --failed` | `gh wait-ci rerun <id> --failed` |
+| `gh workflow list` | `gh wait-ci workflows` |
+
+Three things have no `gh run` equivalent at all: `grep` over a run's logs,
+`--step` filtering, and `annotations`.
 
 ## Live logs (`--logs`)
 
