@@ -204,7 +204,7 @@ func showResults(runIDs []int, ctx *Context) bool {
 			}
 
 			if job.Conclusion == "failure" {
-				fmt.Printf("  %s %s  →  gh run view --log --job %d\n", icon, job.Name, job.DatabaseID)
+				fmt.Printf("  %s %s  →  gh wait-ci log %d --job %d\n", icon, job.Name, runID, job.DatabaseID)
 			} else {
 				fmt.Printf("  %s %s\n", icon, job.Name)
 			}
@@ -216,7 +216,11 @@ func showResults(runIDs []int, ctx *Context) bool {
 		if detail.Conclusion != "success" {
 			fmt.Println()
 			printWarn("View all failed logs:")
-			fmt.Printf("  gh run view %d --log-failed\n", runID)
+			fmt.Printf("  gh wait-ci log %d --failed\n", runID)
+			printWarn("Search them:")
+			fmt.Printf("  gh wait-ci grep '<pattern>' %d --failed -C 3\n", runID)
+			printWarn("Errors GitHub extracted, which are not in the logs:")
+			fmt.Printf("  gh wait-ci annotations %d\n", runID)
 			fmt.Println()
 		}
 	}

@@ -2,7 +2,16 @@ name: CI
 
 on:
   push:
+    branches: ['**']
   workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: write
+  actions: read
+  checks: read
+  deployments: write
+  artifact-metadata: write
 
 jobs:
   test:
@@ -10,15 +19,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
+      # Vends GO_BUILDCACHE_CONFIG, without which go-toolchain refuses to start.
+      - uses: wow-look-at-my/actions@secret-server#latest
 
-      - name: Build
-        run: go build -o gh-wait-ci .
+      - uses: wow-look-at-my/go-toolchain@master
 
       - name: Install bats
         run: sudo apt-get install -y bats
 
-      - name: Run tests
+      # Drives the built binary, so the shipped artifact is exercised as a user runs it.
+      - name: End-to-end tests
         run: bats tests/

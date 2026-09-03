@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"testing"
+)
 
 func TestCleanLogLine(t *testing.T) {
 	const ts = "2026-06-01T02:05:01.1234567Z "
@@ -26,10 +30,8 @@ func TestCleanLogLine(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			gotText, gotOK := cleanLogLine(c.in)
-			if gotText != c.wantText || gotOK != c.wantOK {
-				t.Errorf("cleanLogLine(%q) = (%q, %v), want (%q, %v)",
-					c.in, gotText, gotOK, c.wantText, c.wantOK)
-			}
+			assert.False(t, gotText != c.wantText || gotOK != c.wantOK)
+
 		})
 	}
 }
@@ -40,21 +42,17 @@ func TestEmitDeltaAppendOnly(t *testing.T) {
 	// First poll: two complete lines plus a partial third line. Only the two
 	// complete lines should be consumed; the partial line waits.
 	emitDelta(st, "2026-06-01T00:00:00.0000000Z a\n2026-06-01T00:00:00.0000000Z b\npart", false, false)
-	if st.printed == 0 {
-		t.Fatalf("expected printed to advance past complete lines")
-	}
+	require.NotEqual(t, 0, st.printed)
+
 	afterFirst := st.printed
 
 	// Second poll: the partial line is now complete. printed must advance.
 	emitDelta(st, "2026-06-01T00:00:00.0000000Z a\n2026-06-01T00:00:00.0000000Z b\npartial done\n", false, false)
-	if st.printed <= afterFirst {
-		t.Fatalf("expected printed to advance on completed line, got %d <= %d", st.printed, afterFirst)
-	}
+	require.Greater(t, st.printed, afterFirst)
 
 	// A shorter raw (should never happen) must not panic or rewind.
 	before := st.printed
 	emitDelta(st, "short", false, false)
-	if st.printed != before {
-		t.Fatalf("printed should not change on short read, got %d want %d", st.printed, before)
-	}
+	require.Equal(t, before, st.printed)
+
 }
