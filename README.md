@@ -115,6 +115,11 @@ is the second. A legacy COMMIT STATUS is the third, and a required status such a
 `all-builds` is one of those, so it appears in no run listing and in no check-run
 listing. `checks` reads all three off one commit.
 
+The two surfaces need different permissions. The Checks API is a GitHub App
+scope, so a fine-grained PAT gets 403 there while reading commit statuses fine.
+`checks` reports that loss on stderr and prints the surface it could read, rather
+than failing and hiding the half that names the required gate.
+
 ## Starting a run
 
 ```bash

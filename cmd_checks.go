@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -72,13 +73,26 @@ func newChecksCmd() *cobra.Command {
 				return err
 			}
 
-			combined, err := fetchCombinedStatus(repo, commit)
-			if err != nil {
-				return err
+			// The two surfaces need different permissions, and a token that
+			// reads one often cannot read the other: the Checks API is a
+			// GitHub App scope, so a fine-grained PAT answers it with 403
+			// while the status API answers normally. Failing the whole
+			// command on that would hide the commit statuses, which are the
+			// half that names the required gate. Report each loss instead.
+			combined, statusErr := fetchCombinedStatus(repo, commit)
+			if statusErr != nil {
+				combined = &apiCombinedStatus{State: "unknown"}
+				printWarn("Commit statuses are UNREADABLE with this token, and are missing below:")
+				fmt.Fprintf(os.Stderr, "  %v\n", statusErr)
 			}
-			runs, err := fetchCheckRuns(repo, commit)
-			if err != nil {
-				return err
+			runs, runsErr := fetchCheckRuns(repo, commit)
+			if runsErr != nil {
+				printWarn("Check runs are UNREADABLE with this token, and are missing below:")
+				fmt.Fprintf(os.Stderr, "  %v\n", runsErr)
+				printWarn("The Checks API is a GitHub App scope; a fine-grained PAT cannot read it.")
+			}
+			if statusErr != nil && runsErr != nil {
+				return fmt.Errorf("no check surface of %s could be read", shortSHA(commit))
 			}
 
 			if failedOnly, _ := cmd.Flags().GetBool("failed"); failedOnly {
@@ -143,7 +157,7 @@ func newChecksCmd() *cobra.Command {
 				fmt.Println()
 			}
 
-			if len(report.CheckRuns) == 0 && len(report.Statuses) == 0 {
+			if len(report.CheckRuns) == 0 && len(report.Statuses) == 0 && statusErr == nil && runsErr == nil {
 				printWarn(fmt.Sprintf("No checks reported on %s.", shortSHA(commit)))
 			}
 			return nil

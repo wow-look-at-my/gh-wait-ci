@@ -72,6 +72,21 @@ func TestChecksSaysSoWhenNothingReported(t *testing.T) {
 	assert.Contains(t, out, "No checks reported")
 }
 
+// A fine-grained PAT cannot read the Checks API at all, so half this command
+// 403s in an ordinary session. The commit statuses are the half that names the
+// required gate, so they must still print, and the loss must be stated.
+func TestChecksReportsOneUnreadableSurfaceAndPrintsTheOther(t *testing.T) {
+	commitChecks(t)
+	t.Setenv("MOCK_CHECK_RUNS_403", "1")
+
+	out, err := runCLI(t, "checks")
+	require.NoError(t, err, "one unreadable surface must not fail the command")
+	assert.Contains(t, out, "Check runs are UNREADABLE")
+	assert.Contains(t, out, "GitHub App scope")
+	assert.Contains(t, out, "all-builds", "the readable surface still prints")
+	assert.NotContains(t, out, "No checks reported", "a 403 is not an empty result")
+}
+
 // With --repo and no commit there is no local checkout to read, so the default
 // branch has to supply one.
 func TestChecksFallsBackToTheDefaultBranchWithRepo(t *testing.T) {

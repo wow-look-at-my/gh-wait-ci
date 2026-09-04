@@ -120,6 +120,11 @@ case "$1" in
             body='{"state": "pending", "sha": "abc123def456789", "statuses": []}'
             echo "${MOCK_API_COMBINED_STATUS_JSON:-$body}"
         elif [[ "$endpoint" == repos/*/commits/*/check-runs ]]; then
+            # A fine-grained PAT gets 403 here: the Checks API is an App scope.
+            if [[ "${MOCK_CHECK_RUNS_403:-}" == "1" ]]; then
+                echo "gh: Resource not accessible by personal access token (HTTP 403)" >&2
+                exit 1
+            fi
             body='{"check_runs": []}'
             echo "${MOCK_API_CHECK_RUNS_JSON:-$body}"
         elif [[ "$endpoint" == repos/*/commits/* ]]; then
