@@ -9,9 +9,21 @@ It covers the whole `gh run` surface, so a repository or agent can ban
 
 ## Installation
 
+Releases go to [buildhost](https://pazer.build), not GitHub Releases, so there
+is nothing for `gh extension install` to resolve. A `gh` extension is a
+directory named `gh-<name>` holding an executable of the same name, so placing
+the binary there is the whole install:
+
 ```bash
-gh extension install wow-look-at-my/gh-wait-ci
+mkdir -p ~/.local/share/gh/extensions/gh-wait-ci
+curl -fsSL "https://dl.pazer.build/gh-wait-ci?os=linux&arch=amd64" \
+  -o ~/.local/share/gh/extensions/gh-wait-ci/gh-wait-ci
+chmod +x ~/.local/share/gh/extensions/gh-wait-ci/gh-wait-ci
 ```
+
+`os` is `linux`, `darwin` or `windows`; `arch` is `amd64` or `arm64`. To use it
+as a plain command instead, put the same binary anywhere on `PATH` and run
+`gh-wait-ci` in place of `gh wait-ci`.
 
 ## Usage
 

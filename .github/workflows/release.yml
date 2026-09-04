@@ -6,36 +6,31 @@ on:
       - master
 
 permissions:
-  contents: write
+  contents: read
+  # buildhost authenticates this workflow with a GitHub Actions OIDC token, so
+  # no static registry credential exists in this repository.
+  id-token: write
 
-# One job builds every platform and publishes the release. A build matrix needs
-# a job-to-job hand-off, and the only hand-off GitHub offers for built files is
-# artifact storage, which this org must never use: the quota is org-wide accrued
-# GB-hours, deleting artifacts cannot free it, and exhausting it fails every
-# upload step in every repository until the billing cycle resets. Go
-# cross-compiles in seconds, so the matrix bought nothing here anyway.
+# Releases go to buildhost, not GitHub Releases: an org ruleset blocks creating
+# and updating v* tags, and a GitHub release is a tag. Consumers download from
+# https://dl.pazer.build/gh-wait-ci?os=&arch= instead. The version is the run
+# number, so it climbs monotonically without a tag to derive it from.
+#
+# One job builds every platform, because a build matrix needs a job-to-job
+# hand-off and the only one GitHub offers for built files is artifact storage,
+# which this org must never use: the quota is org-wide accrued GB-hours,
+# deleting artifacts cannot free it, and exhausting it fails every upload step
+# in every repository until the billing cycle resets. Go cross-compiles in
+# seconds, so the matrix bought nothing here anyway.
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23'
-
-      - name: Calculate next version
-        id: next_tag
-        run: |
-          latest=$(git tag -l 'v*' --sort=-v:refname | head -n1)
-          if [ -z "$latest" ]; then
-            num=0
-          else
-            num=${latest#v}
-          fi
-          echo "tag=v$((num + 1))" >> "$GITHUB_OUTPUT"
 
       - name: Build every platform
         run: |
@@ -51,14 +46,36 @@ jobs:
           done
           ls -l binaries
 
-      # The runner's own gh, not a third-party release action: the org's
-      # allowlist admits only PazerOP/*, wow-look-at-my/* and GitHub-owned
-      # actions.
-      - name: Create release
+      - uses: actions/github-script@v7
+        id: oidc
+        with:
+          script: return await core.getIDToken('https://pazer.build')
+
+      - name: Publish to buildhost
         env:
-          GH_TOKEN: ${{ github.token }}
+          BUILDHOST_TOKEN: ${{ steps.oidc.outputs.result }}
+          VERSION: ${{ github.run_number }}
         run: |
-          gh release create "${{ steps.next_tag.outputs.tag }}" \
-            --title "${{ steps.next_tag.outputs.tag }}" \
-            --generate-notes \
-            binaries/*
+          curl -fsSL "https://dl.pazer.build/buildhost?os=linux&arch=amd64" -o /tmp/buildhost
+          chmod +x /tmp/buildhost
+          # Every platform goes into ONE version. Publishing each platform under
+          # its own auto-assigned version would leave each version holding a
+          # single os/arch, and a download for any other platform resolving
+          # against a version that never carried it.
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            ext=""
+            if [ "$os" = "windows" ]; then
+              ext=".exe"
+            fi
+            /tmp/buildhost publish \
+              --server https://pazer.build \
+              --token "$BUILDHOST_TOKEN" \
+              --project gh-wait-ci \
+              --version "$VERSION" \
+              --os "$os" --arch "$arch" \
+              --git-branch "${GITHUB_REF_NAME}" \
+              --git-commit "${GITHUB_SHA}" \
+              --artifact "binaries/gh-wait-ci-${os}-${arch}${ext}"
+          done
