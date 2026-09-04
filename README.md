@@ -10,7 +10,7 @@ It covers the whole `gh run` surface, so a repository or agent can ban
 ## Installation
 
 ```bash
-gh extension install PazerOP/gh-wait-ci
+gh extension install wow-look-at-my/gh-wait-ci
 ```
 
 ## Usage

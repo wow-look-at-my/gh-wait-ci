@@ -8,15 +8,23 @@ on:
 permissions:
   contents: write
 
+# One job builds every platform and publishes the release. A build matrix needs
+# a job-to-job hand-off, and the only hand-off GitHub offers for built files is
+# artifact storage, which this org must never use: the quota is org-wide accrued
+# GB-hours, deleting artifacts cannot free it, and exhausting it fails every
+# upload step in every repository until the billing cycle resets. Go
+# cross-compiles in seconds, so the matrix bought nothing here anyway.
 jobs:
-  version:
+  release:
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.next_tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
 
       - name: Calculate next version
         id: next_tag
@@ -29,60 +37,28 @@ jobs:
           fi
           echo "tag=v$((num + 1))" >> "$GITHUB_OUTPUT"
 
-  build:
-    needs: version
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.23'
-
-      - name: Build
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+      - name: Build every platform
         run: |
-          ext=""
-          if [ "$GOOS" = "windows" ]; then
-            ext=".exe"
-          fi
-          go build -o "gh-wait-ci-${GOOS}-${GOARCH}${ext}" .
+          mkdir -p binaries
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64; do
+            os="${target%/*}"
+            arch="${target#*/}"
+            ext=""
+            if [ "$os" = "windows" ]; then
+              ext=".exe"
+            fi
+            GOOS="$os" GOARCH="$arch" go build -o "binaries/gh-wait-ci-${os}-${arch}${ext}" .
+          done
+          ls -l binaries
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: gh-wait-ci-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: gh-wait-ci-*
-
-  release:
-    needs: [version, build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: binaries
-          merge-multiple: true
-
+      # The runner's own gh, not a third-party release action: the org's
+      # allowlist admits only PazerOP/*, wow-look-at-my/* and GitHub-owned
+      # actions.
       - name: Create release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.version.outputs.tag }}
-          files: binaries/*
-          generate_release_notes: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.next_tag.outputs.tag }}" \
+            --title "${{ steps.next_tag.outputs.tag }}" \
+            --generate-notes \
+            binaries/*
