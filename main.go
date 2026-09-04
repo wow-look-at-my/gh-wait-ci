@@ -22,6 +22,11 @@ const (
 	colorReset  = "\033[0m"
 )
 
+// defaultWaitTimeout bounds every wait. An unbounded wait blocks whoever started
+// it until the run ends, which can be never: a queued job with no free runner
+// never starts. --timeout 0 restores the unbounded wait for a caller who wants it.
+const defaultWaitTimeout = 30 * time.Minute
+
 func printError(msg string) {
 	fmt.Fprintf(os.Stderr, "%sERROR: %s%s\n", colorRed, msg, colorReset)
 }
@@ -320,8 +325,10 @@ func newRootCmd() *cobra.Command {
 			"  log          print logs, filtered by job, step or outcome\n" +
 			"  grep         search logs for a pattern\n" +
 			"  annotations  the errors and warnings that never reach the logs\n" +
+			"  checks       every check on a commit, check runs AND commit statuses\n" +
 			"  artifacts    list and download a run's artifacts\n" +
 			"  workflows    the repository's workflow definitions\n" +
+			"  dispatch     start a workflow_dispatch run\n" +
 			"  cancel       cancel a run\n" +
 			"  rerun        re-run a run, its failed jobs, or one job",
 		Args:          cobra.MaximumNArgs(1),
@@ -335,6 +342,7 @@ func newRootCmd() *cobra.Command {
 	rootCmd.Flags().StringP("sha", "s", "", "Commit SHA to watch (full or partial)")
 	rootCmd.Flags().BoolP("logs", "l", false, "Stream job logs live as they run, instead of a status summary")
 	rootCmd.Flags().IntP("interval", "i", 5, "Polling interval in seconds")
+	rootCmd.Flags().Duration("timeout", defaultWaitTimeout, "Give up waiting after this long (0 waits with no limit)")
 
 	watchCmd := &cobra.Command{
 		Use:   "watch [run-id]",
@@ -346,6 +354,7 @@ func newRootCmd() *cobra.Command {
 	watchCmd.Flags().StringP("sha", "s", "", "Commit SHA to watch (full or partial)")
 	watchCmd.Flags().BoolP("logs", "l", false, "Stream job logs live as they run, instead of a status summary")
 	watchCmd.Flags().IntP("interval", "i", 5, "Polling interval in seconds")
+	watchCmd.Flags().Duration("timeout", defaultWaitTimeout, "Give up waiting after this long (0 waits with no limit)")
 
 	rootCmd.AddCommand(
 		watchCmd,
@@ -355,8 +364,10 @@ func newRootCmd() *cobra.Command {
 		newLogCmd(),
 		newGrepCmd(),
 		newAnnotationsCmd(),
+		newChecksCmd(),
 		newArtifactsCmd(),
 		newWorkflowsCmd(),
+		newDispatchCmd(),
 		newCancelCmd(),
 		newRerunCmd(),
 	)
@@ -383,6 +394,11 @@ func run(cmd *cobra.Command, args []string) error {
 	interval := time.Duration(intervalSec) * time.Second
 	if interval <= 0 {
 		interval = 5 * time.Second
+	}
+	timeout, _ := cmd.Flags().GetDuration("timeout")
+	var deadline time.Time
+	if timeout > 0 {
+		deadline = time.Now().Add(timeout)
 	}
 
 	// When --repo is not set, we need to be in a git repository.
@@ -430,9 +446,9 @@ func run(cmd *cobra.Command, args []string) error {
 
 	var hasFailure bool
 	if logsFlag {
-		hasFailure, err = streamLogs(runIDs, ctx, failFast, interval)
+		hasFailure, err = streamLogs(runIDs, ctx, failFast, interval, deadline)
 	} else {
-		hasFailure, err = waitForRuns(runIDs, failFast, interval)
+		hasFailure, err = waitForRuns(runIDs, failFast, interval, deadline)
 	}
 	if err != nil {
 		return err

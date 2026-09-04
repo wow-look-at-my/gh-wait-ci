@@ -61,15 +61,21 @@ case "$1" in
         shift
         method="GET"
         endpoint=""
+        fields=()
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --method|-X) method="$2"; shift 2 ;;
+                -f) fields+=("$2"); shift 2 ;;
                 -*) shift ;;
                 *) endpoint="$1"; shift ;;
             esac
         done
 
         if [[ "$method" == "POST" ]]; then
+            # A test that asserts what was POSTed reads this log.
+            if [[ -n "${MOCK_API_POST_LOG:-}" ]]; then
+                echo "$endpoint ${fields[*]}" >> "$MOCK_API_POST_LOG"
+            fi
             # cancel / rerun return an empty body on success.
             echo "${MOCK_API_POST_JSON:-}"
             exit "${MOCK_API_POST_EXIT:-0}"
@@ -110,6 +116,12 @@ case "$1" in
             echo "${MOCK_API_WORKFLOWS_JSON:-$body}"
         elif [[ "$endpoint" == repos/*/check-runs/*/annotations ]]; then
             echo "${MOCK_API_ANNOTATIONS_JSON:-[]}"
+        elif [[ "$endpoint" == repos/*/commits/*/status ]]; then
+            body='{"state": "pending", "sha": "abc123def456789", "statuses": []}'
+            echo "${MOCK_API_COMBINED_STATUS_JSON:-$body}"
+        elif [[ "$endpoint" == repos/*/commits/*/check-runs ]]; then
+            body='{"check_runs": []}'
+            echo "${MOCK_API_CHECK_RUNS_JSON:-$body}"
         elif [[ "$endpoint" == repos/*/commits/* ]]; then
             if [[ -n "${MOCK_API_COMMITS_JSON:-}" ]]; then
                 echo "$MOCK_API_COMMITS_JSON"
