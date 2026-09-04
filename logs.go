@@ -164,8 +164,8 @@ func printJobBanner(label, state string) {
 
 // streamLogs waits for all runs to finish while showing live step-by-step
 // progress and printing each job's full log the moment that job completes. It
-// returns whether any job failed.
-func streamLogs(runIDs []int, ctx *Context, failFast bool, interval time.Duration) (bool, error) {
+// returns whether any job failed. A zero deadline waits forever.
+func streamLogs(runIDs []int, ctx *Context, failFast bool, interval time.Duration, deadline time.Time) (bool, error) {
 	printInfo("Streaming logs — step progress is live; each job's full log prints when it finishes.")
 
 	states := map[int]*jobLogState{}
@@ -245,6 +245,9 @@ func streamLogs(runIDs []int, ctx *Context, failFast bool, interval time.Duratio
 		}
 		if allDone {
 			break
+		}
+		if err := checkDeadline(deadline, runIDs); err != nil {
+			return hasFailure, err
 		}
 		time.Sleep(interval)
 	}

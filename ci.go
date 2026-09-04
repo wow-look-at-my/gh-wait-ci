@@ -57,6 +57,21 @@ func findRuns(ctx *Context, runID string) ([]int, error) {
 	return runIDs, nil
 }
 
+// checkDeadline stops a wait that has run out of time. A zero deadline never
+// expires. The error names a run so the caller reads the state it never reached.
+func checkDeadline(deadline time.Time, runIDs []int) error {
+	if deadline.IsZero() || time.Now().Before(deadline) {
+		return nil
+	}
+	id := 0
+	if len(runIDs) > 0 {
+		id = runIDs[0]
+	}
+	return fmt.Errorf("timed out waiting for CI. Read the state it reached with:\n"+
+		"  gh wait-ci view %d\n"+
+		"Raise the limit with --timeout, or pass --timeout 0 to wait with no limit", id)
+}
+
 func getRunDetail(runID int) (*RunDetail, error) {
 	runJSON, err := ghCommand("run", "view", strconv.Itoa(runID),
 		"--json", "status,conclusion,name,jobs,url")
@@ -73,8 +88,8 @@ func getRunDetail(runID int) (*RunDetail, error) {
 }
 
 // waitForRuns waits for all runs to complete. If failFast is true, returns immediately
-// when any job fails. Returns (hasFailure, error).
-func waitForRuns(runIDs []int, failFast bool, interval time.Duration) (bool, error) {
+// when any job fails. A zero deadline waits forever. Returns (hasFailure, error).
+func waitForRuns(runIDs []int, failFast bool, interval time.Duration, deadline time.Time) (bool, error) {
 	printInfo("Waiting for all runs to complete...")
 	fmt.Println()
 
@@ -157,6 +172,9 @@ func waitForRuns(runIDs []int, failFast bool, interval time.Duration) (bool, err
 
 		if allDone {
 			break
+		}
+		if err := checkDeadline(deadline, runIDs); err != nil {
+			return hasFailure, err
 		}
 
 		time.Sleep(interval)

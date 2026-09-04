@@ -25,6 +25,9 @@ gh wait-ci --sha c79dcca
 # Wait for a specific run by ID
 gh wait-ci 12345678
 
+# Give up after 5 minutes instead of the 30-minute default
+gh wait-ci --timeout 5m
+
 # Wait for CI on a remote repo
 gh wait-ci --repo owner/repo
 
@@ -47,6 +50,7 @@ gh wait-ci --logs --interval 3
 | --- | --- |
 | `-l`, `--logs` | Stream step progress live and print each job's full log as it finishes |
 | `-i`, `--interval` | Polling interval in seconds (default `5`) |
+| `--timeout` | Give up waiting after this long (default `30m`; `0` waits with no limit) |
 | `--fail-fast` | Exit immediately when any job fails |
 | `-s`, `--sha` | Commit SHA to watch (full or partial) |
 | `-R`, `--repo` | Target repository in `[HOST/]OWNER/REPO` format |
@@ -94,6 +98,38 @@ that plainly rather than guessing at boundaries.
 renders at the top of a run page. A workflow produces these separately, so
 reading the logs alone can miss the one line that explains a failure.
 
+## A run is not the only thing that gates a merge
+
+```bash
+# Every check on the checked-out commit: check runs AND commit statuses
+gh wait-ci checks
+
+# Only what is not green, which is what blocks the merge
+gh wait-ci checks --failed
+gh wait-ci checks --sha c79dcca --json
+```
+
+Three separate surfaces decide whether a commit is mergeable, and the Actions
+API reports only the first. A workflow run is one. A check run another app posts
+is the second. A legacy COMMIT STATUS is the third, and a required status such as
+`all-builds` is one of those, so it appears in no run listing and in no check-run
+listing. `checks` reads all three off one commit.
+
+The two surfaces need different permissions. The Checks API is a GitHub App
+scope, so a fine-grained PAT gets 403 there while reading commit statuses fine.
+`checks` reports that loss on stderr and prints the surface it could read, rather
+than failing and hiding the half that names the required gate.
+
+## Starting a run
+
+```bash
+gh wait-ci dispatch ci.yml
+gh wait-ci dispatch release.yml --ref master --input level=debug
+```
+
+`dispatch` starts a run of a workflow that declares a `workflow_dispatch`
+trigger.
+
 ## Commands
 
 | Command | What it does |
@@ -106,8 +142,10 @@ reading the logs alone can miss the one line that explains a failure.
 | `gh wait-ci log` | Print logs, filtered by job, step or outcome |
 | `gh wait-ci grep` | Search logs for a pattern |
 | `gh wait-ci annotations` | The errors and warnings that never reach the logs |
+| `gh wait-ci checks` | Every check on a commit: check runs AND commit statuses |
 | `gh wait-ci artifacts` | List a run's artifacts, and download them |
 | `gh wait-ci workflows` | The repository's workflow definitions |
+| `gh wait-ci dispatch` | Start a `workflow_dispatch` run |
 | `gh wait-ci cancel` | Cancel a run |
 | `gh wait-ci rerun` | Re-run a run, its failed jobs, or one job |
 
@@ -131,9 +169,15 @@ human table.
 | `gh run cancel <id>` | `gh wait-ci cancel <id>` |
 | `gh run rerun <id> --failed` | `gh wait-ci rerun <id> --failed` |
 | `gh workflow list` | `gh wait-ci workflows` |
+| `gh workflow run ci.yml -f k=v` | `gh wait-ci dispatch ci.yml --input k=v` |
+| `gh pr checks` | `gh wait-ci checks` |
+| `gh api repos/O/R/commits/S/status` | `gh wait-ci checks --sha S --json` |
+| `gh api repos/O/R/commits/S/check-runs` | `gh wait-ci checks --sha S --json` |
+| `gh api repos/O/R/actions/runs/<id>` | `gh wait-ci view <id> --json` |
+| `gh api repos/O/R/actions/runs/<id>/jobs` | `gh wait-ci jobs <id> --json` |
 
-Three things have no `gh run` equivalent at all: `grep` over a run's logs,
-`--step` filtering, and `annotations`.
+Four things have no `gh run` equivalent at all: `grep` over a run's logs,
+`--step` filtering, `annotations`, and the commit statuses `checks` reports.
 
 ## Live logs (`--logs`)
 
@@ -166,6 +210,11 @@ log the instant each job finishes.
    finishes — or, with `--logs`, streams step progress and job logs as above
 5. Reports final status with job details and links
 6. Shows failed-log commands if CI failed
+
+Every wait is bounded. A queued job that no runner picks up never starts, so an
+unbounded wait blocks whoever started it forever. `--timeout` defaults to 30
+minutes and exits non-zero, naming the command that reads the state the run
+reached. `--timeout 0` waits with no limit.
 
 ## Requirements
 

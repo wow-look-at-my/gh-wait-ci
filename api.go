@@ -121,11 +121,52 @@ type apiWorkflow struct {
 	HTMLURL string `json:"html_url"`
 }
 
+// apiCheckRun is one check run on a commit. A workflow job is one of these, but
+// so is a check an external app posts, which no Actions endpoint reports.
+type apiCheckRun struct {
+	ID          int64    `json:"id"`
+	Name        string   `json:"name"`
+	Status      string   `json:"status"`
+	Conclusion  string   `json:"conclusion"`
+	StartedAt   nullTime `json:"started_at"`
+	CompletedAt nullTime `json:"completed_at"`
+	HTMLURL     string   `json:"html_url"`
+	DetailsURL  string   `json:"details_url"`
+	App         struct {
+		Slug string `json:"slug"`
+		Name string `json:"name"`
+	} `json:"app"`
+	Output struct {
+		Title   string `json:"title"`
+		Summary string `json:"summary"`
+	} `json:"output"`
+}
+
+// apiCommitStatus is one legacy commit status. The org's all-builds merge gate is
+// one of these, so it appears in no check-run listing and in no run listing.
+type apiCommitStatus struct {
+	ID          int64    `json:"id"`
+	State       string   `json:"state"`
+	Context     string   `json:"context"`
+	Description string   `json:"description"`
+	TargetURL   string   `json:"target_url"`
+	UpdatedAt   nullTime `json:"updated_at"`
+	Creator     apiActor `json:"creator"`
+}
+
+// apiCombinedStatus is GitHub's rollup of every commit status on one SHA.
+type apiCombinedStatus struct {
+	State    string            `json:"state"`
+	SHA      string            `json:"sha"`
+	Statuses []apiCommitStatus `json:"statuses"`
+}
+
 // ghAPIBytes runs `gh api` and returns raw stdout. Nothing is trimmed, because
 // callers include ones reading a zip archive and ones doing byte-offset
 // bookkeeping over a log.
 func ghAPIBytes(args ...string) ([]byte, error) {
 	cmd := exec.Command("gh", append([]string{"api"}, args...)...)
+	cmd.Env = ghEnv()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -240,6 +281,38 @@ func fetchWorkflows(repo string) ([]apiWorkflow, error) {
 		return nil, err
 	}
 	return resp.Workflows, nil
+}
+
+// fetchCheckRuns lists every check run on a commit, from any app.
+func fetchCheckRuns(repo, sha string) ([]apiCheckRun, error) {
+	var resp struct {
+		CheckRuns []apiCheckRun `json:"check_runs"`
+	}
+	if err := ghAPIJSON(fmt.Sprintf("repos/%s/commits/%s/check-runs?per_page=100", repo, sha), &resp); err != nil {
+		return nil, err
+	}
+	return resp.CheckRuns, nil
+}
+
+// fetchCombinedStatus reads the commit-status rollup of a commit.
+func fetchCombinedStatus(repo, sha string) (*apiCombinedStatus, error) {
+	var out apiCombinedStatus
+	if err := ghAPIJSON(fmt.Sprintf("repos/%s/commits/%s/status?per_page=100", repo, sha), &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// dispatchWorkflow starts a workflow_dispatch run. Inputs are name=value pairs.
+func dispatchWorkflow(repo, workflow, ref string, inputs map[string]string) error {
+	args := []string{"--method", "POST",
+		fmt.Sprintf("repos/%s/actions/workflows/%s/dispatches", repo, urlValue(workflow)),
+		"-f", "ref=" + ref}
+	for k, v := range inputs {
+		args = append(args, "-f", fmt.Sprintf("inputs[%s]=%s", k, v))
+	}
+	_, err := ghAPIBytes(args...)
+	return err
 }
 
 // runFilter carries the optional filters for a run listing.
