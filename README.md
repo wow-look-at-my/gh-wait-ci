@@ -9,10 +9,10 @@ It covers the whole `gh run` surface, so a repository or agent can ban
 
 ## Installation
 
-Releases go to [buildhost](https://pazer.build), not GitHub Releases, so there
-is nothing for `gh extension install` to resolve. A `gh` extension is a
-directory named `gh-<name>` holding an executable of the same name, so placing
-the binary there is the whole install:
+CI publishes every build to [buildhost](https://pazer.build), not to GitHub
+Releases, so there is nothing for `gh extension install` to resolve. A `gh`
+extension is a directory named `gh-<name>` holding an executable of the same
+name, so placing the binary there is the whole install:
 
 ```bash
 mkdir -p ~/.local/share/gh/extensions/gh-wait-ci
