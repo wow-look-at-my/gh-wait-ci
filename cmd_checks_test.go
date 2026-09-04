@@ -125,6 +125,44 @@ func TestDispatchRejectsAnInputThatIsNotNameValue(t *testing.T) {
 	assert.Contains(t, err.Error(), "name=value")
 }
 
+// @{u} routinely names a different branch: `git checkout -B mine origin/master`
+// leaves it on master. Reading that as "what was pushed" watches master's tip
+// and reports ITS result as this branch's.
+func TestCheckPushedPrefersTheBranchOwnRemoteRef(t *testing.T) {
+	t.Setenv("PATH", mocksDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("MOCK_REMOTE_BRANCH_REF", "bbbbbbbbbbbbbbb")
+	t.Setenv("MOCK_UNPUSHED", "deadbee some commit")
+
+	commit, fellBack, err := checkPushed()
+	require.NoError(t, err)
+	assert.True(t, fellBack)
+	assert.Equal(t, "bbbbbbbbbbbbbbb", commit,
+		"the fallback is origin/<this branch>, never whatever @{u} happens to name")
+}
+
+// Everything pushed: HEAD is the answer, and no fallback is reported.
+func TestCheckPushedUsesHeadWhenNothingIsUnpushed(t *testing.T) {
+	t.Setenv("PATH", mocksDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("MOCK_REMOTE_BRANCH_REF", "bbbbbbbbbbbbbbb")
+
+	commit, fellBack, err := checkPushed()
+	require.NoError(t, err)
+	assert.False(t, fellBack)
+	assert.Equal(t, "HEAD", commit)
+}
+
+// A branch the remote has never seen has no remote ref, and the @{u} path still
+// answers.
+func TestCheckPushedFallsBackToUpstreamWithoutARemoteRef(t *testing.T) {
+	t.Setenv("PATH", mocksDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("MOCK_UNPUSHED", "deadbee some commit")
+
+	commit, fellBack, err := checkPushed()
+	require.NoError(t, err)
+	assert.True(t, fellBack)
+	assert.Equal(t, "abc123def456789", commit, "the mock's rev-parse answer for @{u}")
+}
+
 // An expired deadline stops a wait and says how to read the state it reached.
 // An unexpired one, and the zero value, never stop it.
 func TestCheckDeadline(t *testing.T) {
