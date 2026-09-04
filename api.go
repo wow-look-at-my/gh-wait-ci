@@ -166,6 +166,7 @@ type apiCombinedStatus struct {
 // bookkeeping over a log.
 func ghAPIBytes(args ...string) ([]byte, error) {
 	cmd := exec.Command("gh", append([]string{"api"}, args...)...)
+	cmd.Env = ghEnv()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

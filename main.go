@@ -112,8 +112,18 @@ func ghCommand(args ...string) (string, error) {
 	return runCommand("gh", args...)
 }
 
+// ghEnv marks a `gh` call as this tool's own. An agent environment can block the
+// raw Actions surface of `gh` to force every read through this tool; the block
+// must not then break the tool, which reaches that surface by design.
+func ghEnv() []string {
+	return append(os.Environ(), "GH_WAIT_CI=1")
+}
+
 func runCommand(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
+	if name == "gh" {
+		cmd.Env = ghEnv()
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
