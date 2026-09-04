@@ -7,22 +7,12 @@ on:
 
 permissions:
   contents: read
-  # buildhost authenticates this workflow with a GitHub Actions OIDC token, so
-  # no static registry credential exists in this repository.
+  # buildhost authenticates this workflow with an OIDC token, so no static registry credential exists here.
   id-token: write
 
-# Releases go to buildhost, not GitHub Releases: an org ruleset blocks creating
-# and updating v* tags, and a GitHub release is a tag. Consumers download from
-# https://dl.pazer.build/gh-wait-ci?os=&arch= instead. The version is the run
-# number, so it climbs monotonically without a tag to derive it from.
-#
-# One job builds every platform, because a build matrix needs a job-to-job
-# hand-off and the only one GitHub offers for built files is artifact storage,
-# which this org must never use: the quota is org-wide accrued GB-hours,
-# deleting artifacts cannot free it, and exhausting it fails every upload step
-# in every repository until the billing cycle resets. Go cross-compiles in
-# seconds, so the matrix bought nothing here anyway.
+# Releases go to buildhost, never GitHub Releases: an org ruleset blocks v* tags, and a release is a tag.
 jobs:
+  # One job: a matrix would need a job-to-job hand-off, and artifact storage is banned org-wide.
   release:
     runs-on: ubuntu-latest
     steps:
@@ -58,10 +48,7 @@ jobs:
         run: |
           curl -fsSL "https://dl.pazer.build/buildhost?os=linux&arch=amd64" -o /tmp/buildhost
           chmod +x /tmp/buildhost
-          # Every platform goes into ONE version. Publishing each platform under
-          # its own auto-assigned version would leave each version holding a
-          # single os/arch, and a download for any other platform resolving
-          # against a version that never carried it.
+          # One version holds every platform: an auto-assigned version per platform would each hold a single os/arch.
           for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64; do
             os="${target%/*}"
             arch="${target#*/}"
