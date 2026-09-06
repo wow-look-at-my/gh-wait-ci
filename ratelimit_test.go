@@ -43,12 +43,16 @@ func TestNoHintForAnUnrelatedFailure(t *testing.T) {
 
 // The case this exists for. GitHub says "rate limit exceeded" while the
 // hourly budget is untouched, and the count is the only thing that says so.
+//
+// `Unix()` drops the sub-second part of now, so the wait is a whole number of
+// seconds short of the offset by however far into the second the test started.
+// Rounded, that is one of two values. The pattern pins every other character.
 func TestHeadroomLeftIsReportedAsACount(t *testing.T) {
 	stubRateLimit(t, rateLimitBody(t, 0, 5000, time.Now().Add(42*time.Minute).Unix()), 0)
 
 	got := rateLimitHint("gh: API rate limit exceeded for user ID 6569500 (HTTP 403)")
 
-	assert.Equal(t, "gh-wait-ci: core 0/5000 used, 5000 left, resets in 41m59s", got)
+	assert.Regexp(t, `^gh-wait-ci: core 0/5000 used, 5000 left, resets in 4(1m59s|2m0s)$`, got)
 }
 
 // The other limit, where the count really does mean waiting for the reset.
@@ -57,7 +61,7 @@ func TestExhaustedBudgetIsReportedAsACount(t *testing.T) {
 
 	got := rateLimitHint("API rate limit exceeded")
 
-	assert.Equal(t, "gh-wait-ci: core 5000/5000 used, 0 left, resets in 16m59s", got)
+	assert.Regexp(t, `^gh-wait-ci: core 5000/5000 used, 0 left, resets in 1(6m59s|7m0s)$`, got)
 }
 
 // The budget read can fail too. Saying so beats printing a made-up count.
