@@ -380,6 +380,7 @@ func newRootCmd() *cobra.Command {
 		newDispatchCmd(),
 		newCancelCmd(),
 		newRerunCmd(),
+		newDispatchCmd(),
 	)
 	return rootCmd
 }
