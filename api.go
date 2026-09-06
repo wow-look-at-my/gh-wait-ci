@@ -171,9 +171,68 @@ func ghAPIBytes(args ...string) ([]byte, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("gh api %s: %s: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		msg := strings.TrimSpace(stderr.String())
+		if hint := rateLimitHint(msg); hint != "" {
+			msg += "\n" + hint
+		}
+		return nil, fmt.Errorf("gh api %s: %s: %s", strings.Join(args, " "), err, msg)
 	}
 	return stdout.Bytes(), nil
+}
+
+// rateLimitState is the part of GET /rate_limit this tool reports.
+type rateLimitState struct {
+	Rate struct {
+		Limit     int   `json:"limit"`
+		Used      int   `json:"used"`
+		Remaining int   `json:"remaining"`
+		Reset     int64 `json:"reset"`
+	} `json:"rate"`
+}
+
+// rateLimitHint turns a refusal that blames a rate limit into the numbers the
+// reader needs. GitHub says "API rate limit exceeded" for two different
+// limits, and the message alone cannot tell them apart: the hourly budget
+// runs out and refills at a stated time, while the secondary limit answers a
+// burst and clears in seconds. A reader who cannot tell which one they hit
+// guesses at the cause, and waits for the wrong thing. It returns "" for any
+// failure that is not a rate limit.
+func rateLimitHint(stderr string) string {
+	low := strings.ToLower(stderr)
+	if !strings.Contains(low, "rate limit") {
+		return ""
+	}
+	var st rateLimitState
+	// GET /rate_limit does not itself count against the limits it reports, so
+	// this reads the budget while every other read is being refused.
+	out, err := exec.Command("gh", "api", "rate_limit").Output()
+	if err != nil {
+		return "gh-wait-ci: could not read the rate-limit budget to say which limit this is."
+	}
+	if json.Unmarshal(out, &st) != nil {
+		return "gh-wait-ci: the rate-limit budget did not parse, so which limit this is stays unknown."
+	}
+	r := st.Rate
+	budget := fmt.Sprintf("gh-wait-ci: core budget %d/%d used, %d remaining, refills %s",
+		r.Used, r.Limit, r.Remaining, humanReset(r.Reset))
+	if r.Remaining > 0 {
+		return budget + ".\ngh-wait-ci: the hourly budget is NOT spent, so this is the SECONDARY limit: too many requests at once, rather than too many this hour. It clears in seconds to a minute. Cut concurrent calls rather than waiting for the refill above."
+	}
+	return budget + ".\ngh-wait-ci: the hourly budget IS spent. Nothing succeeds until it refills."
+}
+
+// humanReset renders a reset stamp as both the wall clock and the wait, so a
+// reader knows how long to leave it without doing the arithmetic.
+func humanReset(unix int64) string {
+	if unix <= 0 {
+		return "at an unreported time"
+	}
+	t := time.Unix(unix, 0).UTC()
+	d := time.Until(t).Round(time.Second)
+	if d <= 0 {
+		return fmt.Sprintf("at %s (already due)", t.Format(time.RFC3339))
+	}
+	return fmt.Sprintf("at %s (in %s)", t.Format(time.RFC3339), d)
 }
 
 // ghAPIJSON runs `gh api <path>` and decodes the response into v.
