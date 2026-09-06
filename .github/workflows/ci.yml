@@ -22,10 +22,7 @@ jobs:
       # Vends GO_BUILDCACHE_CONFIG, without which go-toolchain refuses to start.
       - uses: wow-look-at-my/actions@secret-server#latest
 
-      # Publishing 403s until an operator re-pins buildhost's gh-wait-ci project off owner 6569500, this repo's owner before the transfer.
       - uses: wow-look-at-my/go-toolchain@master
-        with:
-          autorelease: 'false'
 
       - name: Install bats
         run: sudo apt-get install -y bats
