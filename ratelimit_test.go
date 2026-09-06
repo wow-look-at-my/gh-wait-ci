@@ -42,45 +42,35 @@ func TestNoHintForAnUnrelatedFailure(t *testing.T) {
 }
 
 // The case this exists for. GitHub says "rate limit exceeded" while the
-// hourly budget is untouched, which is the SECONDARY limit. Reading that
-// message alone leads to waiting an hour for a refill that already happened.
-func TestSecondaryLimitIsNamedWhenTheBudgetIsIntact(t *testing.T) {
-	reset := time.Now().Add(42 * time.Minute).Unix()
-	stubRateLimit(t, rateLimitBody(t, 0, 5000, reset), 0)
+// hourly budget is untouched, and the count is the only thing that says so.
+func TestHeadroomLeftIsReportedAsACount(t *testing.T) {
+	stubRateLimit(t, rateLimitBody(t, 0, 5000, time.Now().Add(42*time.Minute).Unix()), 0)
 
 	got := rateLimitHint("gh: API rate limit exceeded for user ID 6569500 (HTTP 403)")
 
-	assert.Contains(t, got, "SECONDARY limit")
-	assert.Contains(t, got, "0/5000 used")
-	assert.Contains(t, got, "5000 remaining")
-	assert.NotContains(t, got, "hourly budget IS spent")
+	assert.Equal(t, "gh-wait-ci: core 0/5000 used, 5000 left, resets in 41m59s", got)
 }
 
-// The other limit, which really does mean waiting for the stated refill.
-func TestExhaustedHourlyBudgetIsNamedWithItsRefill(t *testing.T) {
-	reset := time.Now().Add(17 * time.Minute).Unix()
-	stubRateLimit(t, rateLimitBody(t, 5000, 0, reset), 0)
+// The other limit, where the count really does mean waiting for the reset.
+func TestExhaustedBudgetIsReportedAsACount(t *testing.T) {
+	stubRateLimit(t, rateLimitBody(t, 5000, 0, time.Now().Add(17*time.Minute).Unix()), 0)
 
 	got := rateLimitHint("API rate limit exceeded")
 
-	assert.Contains(t, got, "hourly budget IS spent")
-	assert.Contains(t, got, "5000/5000 used")
-	assert.Contains(t, got, "in 16m")
-	assert.NotContains(t, got, "SECONDARY")
+	assert.Equal(t, "gh-wait-ci: core 5000/5000 used, 0 left, resets in 16m59s", got)
 }
 
-// The budget read can fail too. Saying so beats a silent omission, which
-// would read as though the limit had been classified.
+// The budget read can fail too. Saying so beats printing a made-up count.
 func TestUnreadableBudgetSaysSoRatherThanGuessing(t *testing.T) {
 	stubRateLimit(t, "", 1)
-	assert.Contains(t, rateLimitHint("API rate limit exceeded"), "could not read the rate-limit budget")
+	assert.Equal(t, "gh-wait-ci: core budget unreadable", rateLimitHint("API rate limit exceeded"))
 
 	stubRateLimit(t, "not json at all", 0)
-	assert.Contains(t, rateLimitHint("API rate limit exceeded"), "did not parse")
+	assert.Equal(t, "gh-wait-ci: core budget unreadable", rateLimitHint("API rate limit exceeded"))
 }
 
-// A reset already in the past must not render as a negative wait.
-func TestAPastResetReadsAsDue(t *testing.T) {
-	assert.Contains(t, humanReset(time.Now().Add(-time.Minute).Unix()), "already due")
-	assert.Contains(t, humanReset(0), "unreported")
+// A reset already past must not render as a negative wait.
+func TestAPastResetReadsAsZero(t *testing.T) {
+	assert.Equal(t, "0s", resetIn(time.Now().Add(-time.Minute).Unix()))
+	assert.Equal(t, "?", resetIn(0))
 }
