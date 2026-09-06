@@ -9,9 +9,16 @@ It covers the whole `gh run` surface, so a repository or agent can ban
 
 ## Installation
 
+Every push publishes the binary to buildhost, which is where consumers take it from:
+
 ```bash
-gh extension install PazerOP/gh-wait-ci
+mkdir -p ~/.local/share/gh/extensions/gh-wait-ci
+curl -fL --compressed "https://dl.pazer.build/gh-wait-ci?os=linux&arch=amd64" \
+  -o ~/.local/share/gh/extensions/gh-wait-ci/gh-wait-ci
+chmod +x ~/.local/share/gh/extensions/gh-wait-ci/gh-wait-ci
 ```
+
+`os` takes `linux`, `darwin` or `windows`, and `arch` takes `amd64` or `arm64`.
 
 ## Usage
 
