@@ -9,10 +9,10 @@ It covers the whole `gh run` surface, so a repository or agent can ban
 
 ## Installation
 
-CI publishes every build to [buildhost](https://pazer.build), not to GitHub
-Releases, so there is nothing for `gh extension install` to resolve. A `gh`
-extension is a directory named `gh-<name>` holding an executable of the same
-name, so placing the binary there is the whole install:
+Builds go to [buildhost](https://pazer.build), not to GitHub Releases, so there
+is nothing for `gh extension install` to resolve. A `gh` extension is a
+directory named `gh-<name>` holding an executable of the same name, so placing
+the binary there is the whole install:
 
 ```bash
 mkdir -p ~/.local/share/gh/extensions/gh-wait-ci
@@ -24,6 +24,12 @@ chmod +x ~/.local/share/gh/extensions/gh-wait-ci/gh-wait-ci
 `os` is `linux`, `darwin` or `windows`; `arch` is `amd64` or `arm64`. To use it
 as a plain command instead, put the same binary anywhere on `PATH` and run
 `gh-wait-ci` in place of `gh wait-ci`.
+
+That URL currently serves a build older than this branch. buildhost's
+`gh-wait-ci` project is pinned to the GitHub owner this repository had before it
+moved orgs, so the publish 403s and CI has it turned off; an operator has to
+re-pin the project before new builds land there. Until then, `go build .` is the
+only way to get current code.
 
 ## Usage
 
