@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -141,6 +142,16 @@ func TestMatchesStepAcceptsANumberOrACaseInsensitiveSubstring(t *testing.T) {
 	assert.True(t, matchesStep(s, "TOOLCHAIN"))
 	assert.False(t, matchesStep(s, "8"))
 	assert.False(t, matchesStep(s, "deploy"))
+}
+
+// A 404 is GitHub not having written a log out yet, and the caller reports
+// that. Every other failure is real, and calling it "not available yet" sends
+// the reader off to wait for a log that was never coming.
+func TestIsNotFoundSeparatesAMissingLogFromARealFailure(t *testing.T) {
+	assert.True(t, isNotFound(errors.New("gh api repos/o/r/actions/jobs/1/logs: exit status 1: gh: HTTP 404")))
+	assert.False(t, isNotFound(errors.New("gh api ...: exit status 1: gh: HTTP 500")))
+	assert.False(t, isNotFound(errors.New("gh api ...: exit status 4: authentication required")))
+	assert.False(t, isNotFound(nil))
 }
 
 func TestJobFailedTreatsAnUnfinishedJobAsNotFailed(t *testing.T) {
