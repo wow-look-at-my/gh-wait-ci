@@ -165,6 +165,9 @@ type apiCombinedStatus struct {
 // callers include ones reading a zip archive and ones doing byte-offset
 // bookkeeping over a log.
 func ghAPIBytes(args ...string) ([]byte, error) {
+	if repoHost != "" {
+		args = append([]string{"--hostname", repoHost}, args...)
+	}
 	cmd := exec.Command("gh", append([]string{"api"}, args...)...)
 	cmd.Env = ghEnv()
 	var stdout, stderr bytes.Buffer

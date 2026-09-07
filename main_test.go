@@ -39,6 +39,35 @@ func TestRepoFlagReachesEverySubcommand(t *testing.T) {
 	}
 }
 
+// -R advertises [HOST/]OWNER/REPO. The host has to come off before a path is
+// built from it: `repos/HOST/OWNER/REPO` is a path of the wrong shape, and the
+// API answers 404 rather than naming the mistake.
+func TestRepoFlagSplitsTheHostOffThePath(t *testing.T) {
+	host, repo := splitRepoTarget("github-state-mirror.example.com/wow-look-at-my/actions")
+	assert.Equal(t, "github-state-mirror.example.com", host)
+	assert.Equal(t, "wow-look-at-my/actions", repo)
+}
+
+// A bare OWNER/REPO keeps its old meaning: no host, and gh picks the default.
+func TestABareRepoFlagNamesNoHost(t *testing.T) {
+	host, repo := splitRepoTarget("wow-look-at-my/actions")
+	assert.Empty(t, host)
+	assert.Equal(t, "wow-look-at-my/actions", repo)
+}
+
+// The `gh` subcommands take the host on -R themselves, so what the user typed
+// has to survive the split.
+func TestRepoTargetRebuildsWhatTheUserTyped(t *testing.T) {
+	previousHost, previousRepo := repoHost, repoFlag
+	t.Cleanup(func() { repoHost, repoFlag = previousHost, previousRepo })
+
+	repoHost, repoFlag = splitRepoTarget("example.com/wow-look-at-my/actions")
+	assert.Equal(t, "example.com/wow-look-at-my/actions", repoTarget())
+
+	repoHost, repoFlag = splitRepoTarget("wow-look-at-my/actions")
+	assert.Equal(t, "wow-look-at-my/actions", repoTarget())
+}
+
 func TestLogAndGrepShareTheSameFilters(t *testing.T) {
 	root := newRootCmd()
 	for _, name := range []string{"log", "grep"} {
