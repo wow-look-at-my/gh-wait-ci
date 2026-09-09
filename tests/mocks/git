@@ -3,17 +3,29 @@
 
 case "$1" in
     rev-parse)
-        if [[ "$2" == "--git-dir" ]]; then
+        if [[ "$2" == "--verify" ]]; then
+            # The branch's own remote ref. Absent unless a test provides one.
+            if [[ -n "${MOCK_REMOTE_BRANCH_REF:-}" ]]; then
+                echo "$MOCK_REMOTE_BRANCH_REF"
+            else
+                echo "fatal: Needed a single revision" >&2
+                exit 128
+            fi
+        elif [[ "$2" == "--git-dir" ]]; then
+            if [[ "${MOCK_GIT_NOT_IN_REPO:-}" == "true" ]]; then
+                echo "fatal: not a git repository (or any of the parent directories): .git" >&2
+                exit 128
+            fi
             echo ".git"
-        elif [[ "$2" == "HEAD" ]]; then
-            echo "abc123def456789"
         elif [[ "$2" == "--short" ]]; then
-            echo "abc123d"
+            echo "${MOCK_REV_PARSE_SHORT:-abc123d}"
+        else
+            echo "${MOCK_REV_PARSE:-abc123def456789}"
         fi
         ;;
     log)
-        # Pretend no unpushed commits
-        echo ""
+        # Empty means nothing unpushed, which is what most cases want.
+        echo "${MOCK_UNPUSHED:-}"
         ;;
     branch)
         if [[ "$2" == "--show-current" ]]; then
