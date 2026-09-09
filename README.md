@@ -6,6 +6,11 @@ It covers the full `gh run` surface. A repository or an agent can ban `gh run *`
 
 ## Installation
 
+Every push publishes the binary to buildhost, which is where consumers take it from:
+
+```bash
+mkdir -p ~/.local/share/gh/extensions/gh-wait-ci
+curl -fL --compressed "https://dl.pazer.build/gh-wait-ci?os=linux&arch=amd64" \
 Builds go to [buildhost](https://pazer.build), not to GitHub Releases. There is nothing for `gh extension install` to resolve. A `gh` extension is a directory named `gh-<name>` that holds an executable of the same name. To put the binary there is the full install:
 
 ```bash
@@ -15,6 +20,7 @@ curl -fsSL "https://dl.pazer.build/gh-wait-ci?os=linux&arch=amd64" \
 chmod +x ~/.local/share/gh/extensions/gh-wait-ci/gh-wait-ci
 ```
 
+`os` takes `linux`, `darwin` or `windows`, and `arch` takes `amd64` or `arm64`.
 Set `os` to `linux`, `darwin` or `windows`. Set `arch` to `amd64` or `arm64`. To use the tool as a plain command, put the same binary on `PATH`. Then run `gh-wait-ci` in place of `gh wait-ci`.
 
 That URL serves a build older than this branch. The buildhost project keeps the GitHub owner that this repository had before it moved orgs. The publish gets HTTP 403 for that reason. CI therefore keeps the publish off. An operator must re-pin the project first. Until then, `go build .` is the only source of current code.

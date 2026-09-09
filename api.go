@@ -171,9 +171,55 @@ func ghAPIBytes(args ...string) ([]byte, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("gh api %s: %s: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		msg := strings.TrimSpace(stderr.String())
+		if hint := rateLimitHint(msg); hint != "" {
+			msg += "\n" + hint
+		}
+		return nil, fmt.Errorf("gh api %s: %s: %s", strings.Join(args, " "), err, msg)
 	}
 	return stdout.Bytes(), nil
+}
+
+// rateLimitState is the part of GET /rate_limit this tool reports.
+type rateLimitState struct {
+	Rate struct {
+		Limit     int   `json:"limit"`
+		Used      int   `json:"used"`
+		Remaining int   `json:"remaining"`
+		Reset     int64 `json:"reset"`
+	} `json:"rate"`
+}
+
+// rateLimitHint answers a refusal that blames a rate limit with the budget's
+// actual numbers. GitHub says "API rate limit exceeded" for both the hourly
+// budget and the secondary burst limit, and the sentence is identical, so the
+// count is what tells them apart: headroom left means the hour was never the
+// problem. It returns "" for any failure that is not a rate limit.
+func rateLimitHint(stderr string) string {
+	if !strings.Contains(strings.ToLower(stderr), "rate limit") {
+		return ""
+	}
+	var st rateLimitState
+	// GET /rate_limit does not itself count against the limits it reports, so
+	// this reads the budget while every other read is being refused.
+	out, err := exec.Command("gh", "api", "rate_limit").Output()
+	if err != nil || json.Unmarshal(out, &st) != nil {
+		return "gh-wait-ci: core budget unreadable"
+	}
+	r := st.Rate
+	return fmt.Sprintf("gh-wait-ci: core %d/%d used, %d left, resets in %s",
+		r.Used, r.Limit, r.Remaining, resetIn(r.Reset))
+}
+
+// resetIn is the wait until a reset stamp, already worked out.
+func resetIn(unix int64) string {
+	if unix <= 0 {
+		return "?"
+	}
+	if d := time.Until(time.Unix(unix, 0)).Round(time.Second); d > 0 {
+		return d.String()
+	}
+	return "0s"
 }
 
 // ghAPIJSON runs `gh api <path>` and decodes the response into v.
