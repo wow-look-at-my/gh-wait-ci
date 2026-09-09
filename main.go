@@ -173,17 +173,33 @@ func findGitRepo() error {
 	}
 }
 
-// checkPushed checks if there are unpushed commits. Returns the commit to use
-// (either HEAD if all pushed, or the upstream commit if unpushed commits exist)
-// and a boolean indicating if we fell back to the upstream commit.
+// checkPushed returns the commit to watch, and whether it had to fall back off
+// HEAD. A run only exists for a commit the remote has, so an unpushed HEAD has
+// none.
+//
+// The reference point is the branch's OWN remote ref, not @{u}. @{u} routinely
+// names a DIFFERENT branch -- `git checkout -B mine origin/master` leaves it on
+// master -- and reading that as "what was pushed" watches another branch's tip
+// and reports ITS result as this branch's, which is a wrong answer that looks
+// exactly like a right one.
 func checkPushed() (string, bool, error) {
+	if branch, err := runCommand("git", "branch", "--show-current"); err == nil && branch != "" {
+		ref := "refs/remotes/origin/" + branch
+		if commit, err := runCommand("git", "rev-parse", "--verify", ref); err == nil && commit != "" {
+			unpushed, err := runCommand("git", "log", ref+"..HEAD", "--oneline")
+			if err == nil && unpushed == "" {
+				return "HEAD", false, nil
+			}
+			return commit, true, nil
+		}
+	}
+
 	unpushed, err := runCommand("git", "log", "@{u}..HEAD", "--oneline")
 	if err != nil {
-		// If there's no upstream, use HEAD (can't determine pushed state)
+		// No upstream at all: use HEAD, because the pushed state is unknowable.
 		return "HEAD", false, nil
 	}
 	if unpushed != "" {
-		// Get the upstream commit to use instead
 		upstreamCommit, err := runCommand("git", "rev-parse", "@{u}")
 		if err != nil {
 			return "", false, fmt.Errorf("could not get upstream commit: %w", err)
