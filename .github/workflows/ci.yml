@@ -14,8 +14,7 @@ permissions:
   artifact-metadata: write
 
 jobs:
-  # go-toolchain builds, vets, tests with coverage, and runs the dats/ suite
-  # sandboxed -- which is what covers the command line here.
+  # go-toolchain builds, vets, tests with coverage, and runs the dats/ suite sandboxed.
   build:
     runs-on: ubuntu-latest
     steps:
