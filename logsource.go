@@ -84,6 +84,67 @@ func splitLines(body string) []string {
 	return strings.Split(body, "\n")
 }
 
+// stepBOM opens every step's chunk inside a per-job log. It is the only step
+// boundary those logs carry. They hold no ##[start-action] pairs: those live in
+// the run archive, which GitHub publishes only once the whole run finishes.
+// Built from its code point: Go rejects a literal BOM in a source file.
+const bomRune rune = 0xFEFF
+
+var stepBOM = string(bomRune)
+
+// splitJobLog cuts one job's log into a section per step.
+//
+// The BOM gives the boundaries. The names and outcomes come from the API,
+// because the text names only the steps that open with a ##[group]Run header
+// and never states an outcome at all. A skipped step writes nothing, so the
+// chunks pair with the steps that ran, in order.
+//
+// A pairing that does not line up returns nil and the caller keeps the whole
+// job. A wrong step name on the log somebody is reading to find a failure is
+// worse than no split.
+func splitJobLog(job apiJob, lines []string) []logSection {
+	var starts []int
+	for i, l := range lines {
+		if strings.HasPrefix(l, stepBOM) {
+			starts = append(starts, i)
+		}
+	}
+	if len(starts) == 0 {
+		return nil
+	}
+
+	var ran []apiStep
+	for _, s := range job.Steps {
+		if s.Conclusion == "skipped" {
+			continue
+		}
+		ran = append(ran, s)
+	}
+	if len(ran) != len(starts) {
+		return nil
+	}
+
+	sections := make([]logSection, 0, len(starts))
+	for i, start := range starts {
+		end := len(lines)
+		if i+1 < len(starts) {
+			end = starts[i+1]
+		}
+		chunk := make([]string, end-start)
+		copy(chunk, lines[start:end])
+		chunk[0] = strings.TrimPrefix(chunk[0], stepBOM)
+		sections = append(sections, logSection{
+			JobID:      job.ID,
+			JobName:    job.Name,
+			StepNumber: ran[i].Number,
+			StepName:   ran[i].Name,
+			Conclusion: ran[i].Conclusion,
+			Lines:      chunk,
+		})
+	}
+	return sections
+}
+
 // zipFile is one parsed entry of the run archive.
 type zipFile struct {
 	path string
@@ -300,6 +361,9 @@ func collectSections(repo string, runID int64, jobs []apiJob, opt collectOptions
 
 	if len(sections) == 0 {
 		// The archive is not published yet. Every job that has finished still
+		// has its own downloadable log, so read those instead. Those logs carry
+		// step boundaries too, as BOMs, so a run in progress still answers
+		// --step and --failed rather than dumping the whole job.
 		// has its own downloadable log, so read those instead.
 		//
 		// A 404 here is the ordinary answer for a log GitHub has not written
@@ -318,9 +382,15 @@ func collectSections(repo string, runID int64, jobs []apiJob, opt collectOptions
 			if strings.TrimSpace(body) == "" {
 				continue
 			}
+			lines := splitLines(body)
+			if steps := splitJobLog(j, lines); steps != nil {
+				sections = append(sections, steps...)
+				haveSteps = true
+				continue
+			}
 			sections = append(sections, logSection{
 				JobID: j.ID, JobName: j.Name, Conclusion: j.Conclusion,
-				Lines: splitLines(body),
+				Lines: lines,
 			})
 		}
 	}
