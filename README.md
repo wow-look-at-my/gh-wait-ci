@@ -1,17 +1,23 @@
 # gh-wait-ci
 
-A GitHub CLI extension to wait for CI to complete without polling spam, and to
-read and search everything a run produced.
+A GitHub CLI extension that waits for CI without polling spam. It also reads and searches everything a run produced.
 
-It covers the whole `gh run` surface, so a repository or agent can ban
-`gh run *` outright and lose nothing. See
-[Replacing `gh run`](#replacing-gh-run) for the command-by-command mapping.
+It covers the full `gh run` surface. A repository or an agent can ban `gh run *` outright and lose nothing. See [Replacing `gh run`](#replacing-gh-run) for the command-by-command mapping.
 
 ## Installation
 
+Builds go to [buildhost](https://pazer.build), not to GitHub Releases. There is nothing for `gh extension install` to resolve. A `gh` extension is a directory named `gh-<name>` that holds an executable of the same name. To put the binary there is the full install:
+
 ```bash
-gh extension install PazerOP/gh-wait-ci
+mkdir -p ~/.local/share/gh/extensions/gh-wait-ci
+curl -fsSL "https://dl.pazer.build/gh-wait-ci?os=linux&arch=amd64" \
+  -o ~/.local/share/gh/extensions/gh-wait-ci/gh-wait-ci
+chmod +x ~/.local/share/gh/extensions/gh-wait-ci/gh-wait-ci
 ```
+
+Set `os` to `linux`, `darwin` or `windows`. Set `arch` to `amd64` or `arm64`. To use the tool as a plain command, put the same binary on `PATH`. Then run `gh-wait-ci` in place of `gh wait-ci`.
+
+That URL serves a build older than this branch. The buildhost project keeps the GitHub owner that this repository had before it moved orgs. The publish gets HTTP 403 for that reason. CI therefore keeps the publish off. An operator must re-pin the project first. Until then, `go build .` is the only source of current code.
 
 ## Usage
 
@@ -50,7 +56,7 @@ gh wait-ci --logs --interval 3
 | --- | --- |
 | `-l`, `--logs` | Stream step progress live and print each job's full log as it finishes |
 | `-i`, `--interval` | Polling interval in seconds (default `5`) |
-| `--timeout` | Give up waiting after this long (default `30m`; `0` waits with no limit) |
+| `--timeout` | Give up waiting after this long (default `30m`, and `0` waits with no limit) |
 | `--fail-fast` | Exit immediately when any job fails |
 | `-s`, `--sha` | Commit SHA to watch (full or partial) |
 | `-R`, `--repo` | Target repository in `[HOST/]OWNER/REPO` format |
@@ -78,25 +84,17 @@ gh wait-ci grep -F 'exit status 1' --count
 gh wait-ci grep 'FAIL' --json | jq -r '.[].text'
 ```
 
-`log` and `grep` both accept a run ID, `--sha`, `--workflow` and `--attempt` to
-pick which run they read, and default to the run for the commit checked out.
+`log` and `grep` both accept a run ID, `--sha`, `--workflow` and `--attempt` to pick which run they read. Both default to the run for the commit checked out.
 
-Matching runs against the CLEANED text, so a pattern never has to allow for the
-RFC3339 timestamp GitHub prefixes onto every line, nor for the `##[error]`
-markers it wraps output in. Pass `--raw` to `log` to see the bytes as stored.
+A pattern matches against the CLEANED text. A pattern therefore never has to allow for the RFC3339 timestamp that GitHub puts on each line. It never has to allow for the `##[error]` markers around the output. Pass `--raw` to `log` to see the bytes as stored.
 
 ### Step-level output needs a finished run
 
-A job's own log is downloadable the moment that job completes, so `log --job`
-works while the rest of a run is still going. The archive that carries STEP
-boundaries is published only once the whole run finishes, so `--step` reports
-that plainly rather than guessing at boundaries.
+A job's own log is available the moment that job completes. `log --job` therefore works while the rest of the run continues. The archive that carries STEP boundaries becomes available only after the full run finishes. `--step` reports that plainly instead of a guess at the boundaries.
 
 ### Annotations are not in the logs
 
-`gh wait-ci annotations` shows the file-and-line errors and warnings GitHub
-renders at the top of a run page. A workflow produces these separately, so
-reading the logs alone can miss the one line that explains a failure.
+`gh wait-ci annotations` shows the file-and-line errors and warnings that GitHub renders at the top of a run page. A workflow produces these separately. To read the logs alone can miss the one line that explains a failure.
 
 ## A run is not the only thing that gates a merge
 
@@ -109,16 +107,9 @@ gh wait-ci checks --failed
 gh wait-ci checks --sha c79dcca --json
 ```
 
-Three separate surfaces decide whether a commit is mergeable, and the Actions
-API reports only the first. A workflow run is one. A check run another app posts
-is the second. A legacy COMMIT STATUS is the third, and a required status such as
-`all-builds` is one of those, so it appears in no run listing and in no check-run
-listing. `checks` reads all three off one commit.
+Three separate surfaces decide whether a commit is mergeable. The Actions API reports only the first of them. A workflow run is the first. A check run from another app is the second. A legacy COMMIT STATUS is the third. A required status such as `all-builds` is a commit status. It therefore appears in no run listing and in no check-run listing. `checks` reads all three surfaces off one commit.
 
-The two surfaces need different permissions. The Checks API is a GitHub App
-scope, so a fine-grained PAT gets 403 there while reading commit statuses fine.
-`checks` reports that loss on stderr and prints the surface it could read, rather
-than failing and hiding the half that names the required gate.
+The surfaces need different permissions. The Checks API is a GitHub App scope. A fine-grained PAT gets HTTP 403 there. The same PAT reads commit statuses correctly. `checks` reports that loss on stderr. It prints the surface that it can read. It does not fail and hide the half that names the required gate.
 
 ## Starting a run
 
@@ -127,8 +118,7 @@ gh wait-ci dispatch ci.yml
 gh wait-ci dispatch release.yml --ref master --input level=debug
 ```
 
-`dispatch` starts a run of a workflow that declares a `workflow_dispatch`
-trigger.
+`dispatch` starts a run of a workflow that declares a `workflow_dispatch` trigger.
 
 ## Commands
 
@@ -149,8 +139,7 @@ trigger.
 | `gh wait-ci cancel` | Cancel a run |
 | `gh wait-ci rerun` | Re-run a run, its failed jobs, or one job |
 
-Every query command takes `--json`, so a script consumes it without parsing the
-human table.
+Every query command takes `--json`. A script therefore consumes the output without a parse of the human table.
 
 ## Replacing `gh run`
 
@@ -176,45 +165,30 @@ human table.
 | `gh api repos/O/R/actions/runs/<id>` | `gh wait-ci view <id> --json` |
 | `gh api repos/O/R/actions/runs/<id>/jobs` | `gh wait-ci jobs <id> --json` |
 
-Four things have no `gh run` equivalent at all: `grep` over a run's logs,
-`--step` filtering, `annotations`, and the commit statuses `checks` reports.
+Four things have no `gh run` equivalent at all. These are `grep` over a run's logs, the `--step` filter, `annotations`, and the commit statuses that `checks` reports.
 
 ## Live logs (`--logs`)
 
-By default `gh wait-ci` shows a live status summary. With `--logs` it also shows
-the actual log output:
+By default `gh wait-ci` shows a live status summary. With `--logs` it also shows the actual log output.
 
-- **Step progress is live.** As each job runs, its steps print as they start and
-  finish (`✓ Build`, `✓ Run tests`, ...), so you can watch progress in the
-  terminal instead of refreshing the Actions page.
-- **Each job's full log prints the moment that job finishes**, with timestamps
-  stripped and `##[group]` / `##[error]` markers cleaned up. In a multi-job
-  workflow the logs arrive progressively, one job at a time, as each completes.
+- **Step progress is live.** Each job prints its steps as they start and finish, such as `✓ Build` and `✓ Run tests`. You watch progress in the terminal instead of a refresh of the Actions page.
+- **Each job's full log prints the moment that job finishes.** Timestamps are stripped. The `##[group]` and `##[error]` markers are cleaned up. In a multi-job workflow the logs arrive one job at a time, as each job completes.
 
 ### Why logs appear per job, not line-by-line
 
-GitHub's REST API only makes a job's log downloadable once the job has
-**completed** — while it runs, the logs endpoint redirects to a storage blob
-that doesn't exist yet (HTTP 404). The line-by-line live log you see on
-github.com is rendered from the browser's authenticated web session, which a
-token-based CLI can't reuse. So `--logs` streams the most granular output the
-GitHub API actually exposes to a token: step transitions live, and the full job
-log the instant each job finishes.
+GitHub's REST API makes a job's log available for download only after the job completes. While the job runs, the logs endpoint redirects to a storage blob that does not exist yet (HTTP 404). The line-by-line live log on github.com comes from the browser's authenticated web session. A token-based CLI cannot reuse that session. So `--logs` streams the most granular output that the GitHub API gives to a token. That output is the live step transitions, plus the full job log the instant each job finishes.
 
 ## What it does
 
-1. Checks you're in a git repo with pushed commits
-2. Shows repo, branch, commit, and PR info
-3. Finds workflow runs for the current commit (retries if not found yet)
-4. Polls run status every few seconds (no `sleep`-loop spam) until everything
-   finishes — or, with `--logs`, streams step progress and job logs as above
-5. Reports final status with job details and links
-6. Shows failed-log commands if CI failed
+1. Checks that you are in a git repository with pushed commits
+2. Shows repository, branch, commit, and PR information
+3. Finds workflow runs for the current commit, and retries when it finds none yet
+4. Polls run status every few seconds, with no `sleep`-loop spam, until everything finishes
+5. Streams step progress and job logs instead, when you pass `--logs`
+6. Reports the final status with job details and links
+7. Shows the failed-log commands when CI fails
 
-Every wait is bounded. A queued job that no runner picks up never starts, so an
-unbounded wait blocks whoever started it forever. `--timeout` defaults to 30
-minutes and exits non-zero, naming the command that reads the state the run
-reached. `--timeout 0` waits with no limit.
+Every wait is bounded. A queued job that no runner picks up never starts. An unbounded wait therefore blocks the caller forever. `--timeout` defaults to 30 minutes and exits non-zero. Its message names the command that reads the state the run reached. `--timeout 0` waits with no limit.
 
 ## Requirements
 
