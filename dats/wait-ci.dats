@@ -43,7 +43,7 @@ tests:
 			MOCK_RUN_LIST_JSON: '[{"databaseId": 12345, "status": "completed", "conclusion": "failure", "name": "CI"}]'
 			MOCK_RUN_VIEW_JSON: '{"status": "completed", "conclusion": "failure", "name": "CI", "url": "https://github.com/test-owner/test-repo/actions/runs/12345", "jobs": [{"name": "build", "status": "completed", "conclusion": "failure", "databaseId": 111}]}'
 	  outputs:
-		stdout:
+		stderr:
 			- "FAILED"
 
 	- desc: every job is listed, whatever its conclusion

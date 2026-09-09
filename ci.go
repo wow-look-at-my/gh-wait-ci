@@ -206,6 +206,7 @@ func showResults(runIDs []int, ctx *Context) bool {
 		fmt.Println()
 
 		printInfo("Jobs:")
+		var failedJobs []Job
 		for _, job := range detail.Jobs {
 			var icon string
 			switch job.Conclusion {
@@ -222,12 +223,24 @@ func showResults(runIDs []int, ctx *Context) bool {
 			}
 
 			if job.Conclusion == "failure" {
+				failedJobs = append(failedJobs, job)
 				fmt.Printf("  %s %s  →  gh wait-ci log %d --job %d\n", icon, job.Name, runID, job.DatabaseID)
 			} else {
 				fmt.Printf("  %s %s\n", icon, job.Name)
 			}
 		}
 		fmt.Println()
+
+		// The failure itself, not a command that would show it.
+		for _, job := range failedJobs {
+			excerpt := jobFailureLog(runID, job.DatabaseID)
+			if excerpt == "" {
+				continue
+			}
+			printError(fmt.Sprintf("❌ %s", job.Name))
+			fmt.Println(excerpt)
+			fmt.Println()
+		}
 
 		fmt.Printf("     Run:  %s\n", detail.URL)
 

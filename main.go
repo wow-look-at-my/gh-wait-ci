@@ -199,7 +199,6 @@ func findGitRepo() error {
 	}
 }
 
-<<<<<<< HEAD
 func getRepoFromRemote() (string, error) {
 	// Try to parse origin remote URL directly (preferred - avoids gh repo view picking wrong remote)
 	remoteURL, err := runCommand("git", "remote", "get-url", "origin")
@@ -232,8 +231,6 @@ func getRepoFromRemote() (string, error) {
 	return repoInfo.NameWithOwner, nil
 }
 
-func checkPushed() error {
-=======
 // checkPushed returns the commit to watch, and whether it had to fall back off
 // HEAD. A run only exists for a commit the remote has, so an unpushed HEAD has
 // none.
@@ -255,7 +252,6 @@ func checkPushed() (string, bool, error) {
 		}
 	}
 
->>>>>>> origin/master
 	unpushed, err := runCommand("git", "log", "@{u}..HEAD", "--oneline")
 	if err != nil {
 		// No upstream at all: use HEAD, because the pushed state is unknowable.
@@ -428,195 +424,6 @@ func newRootCmd() *cobra.Command {
 	watchCmd.Flags().IntP("interval", "i", 5, "Polling interval in seconds")
 	watchCmd.Flags().Duration("timeout", defaultWaitTimeout, "Give up waiting after this long (0 waits with no limit)")
 
-<<<<<<< HEAD
-	runIDs := make([]int, len(runs))
-	printInfo(fmt.Sprintf("Found %d workflow run(s):", len(runs)))
-	for i, run := range runs {
-		runIDs[i] = run.DatabaseID
-		fmt.Printf("  %d %s\n", run.DatabaseID, run.Name)
-	}
-	fmt.Println()
-
-	return runIDs, nil
-}
-
-func getRunDetail(runID int) (*RunDetail, error) {
-	runJSON, err := runCommand("gh", "run", "view", strconv.Itoa(runID),
-		"--json", "status,conclusion,name,jobs,url")
-	if err != nil {
-		return nil, err
-	}
-
-	var detail RunDetail
-	if err := json.Unmarshal([]byte(runJSON), &detail); err != nil {
-		return nil, err
-	}
-
-	return &detail, nil
-}
-
-// waitForRuns waits for all runs to complete. If failFast is true, returns immediately
-// when any job fails. Returns (hasFailure, error).
-func waitForRuns(runIDs []int, failFast bool) (bool, error) {
-	printInfo("Waiting for all runs to complete...")
-	fmt.Println()
-
-	lastState := ""
-	firstPrint := true
-	hasFailure := false
-
-	for {
-		allDone := true
-		totalJobs := 0
-		completedJobs := 0
-		currentState := ""
-		var output strings.Builder
-
-		for _, runID := range runIDs {
-			detail, err := getRunDetail(runID)
-			if err != nil {
-				continue
-			}
-
-			for _, job := range detail.Jobs {
-				totalJobs++
-				currentState += fmt.Sprintf("%d:%s:%s:%s|", runID, job.Name, job.Status, job.Conclusion)
-
-				var line string
-				if job.Status == "completed" {
-					completedJobs++
-					switch job.Conclusion {
-					case "success":
-						line = fmt.Sprintf("  ✅ %s / %s\n", detail.Name, job.Name)
-					case "skipped":
-						line = fmt.Sprintf("  ⏭️  %s / %s (skipped)\n", detail.Name, job.Name)
-					default:
-						line = fmt.Sprintf("  ❌ %s / %s (%s)\n", detail.Name, job.Name, job.Conclusion)
-						hasFailure = true
-					}
-				} else if job.Status == "in_progress" {
-					line = fmt.Sprintf("  🔄 %s / %s\n", detail.Name, job.Name)
-				} else if job.Status == "queued" || job.Status == "waiting" {
-					line = fmt.Sprintf("  ⏳ %s / %s\n", detail.Name, job.Name)
-				} else {
-					line = fmt.Sprintf("  ⏳ %s / %s (%s)\n", detail.Name, job.Name, job.Status)
-				}
-				output.WriteString(line)
-			}
-
-			if detail.Status != "completed" {
-				allDone = false
-			}
-		}
-
-		percent := 0
-		if totalJobs > 0 {
-			percent = completedJobs * 100 / totalJobs
-		}
-
-		if currentState != lastState {
-			if !firstPrint {
-				linesToClear := totalJobs + 1
-				for i := 0; i < linesToClear; i++ {
-					fmt.Print("\033[A\033[2K")
-				}
-			}
-			firstPrint = false
-
-			printInfo(fmt.Sprintf("Progress: %d/%d (%d%%)", completedJobs, totalJobs, percent))
-			fmt.Print(output.String())
-			lastState = currentState
-		}
-
-		if failFast && hasFailure {
-			fmt.Println()
-			printWarn("Failure detected, exiting early (--fail-fast)")
-			return true, nil
-		}
-
-		if allDone {
-			break
-		}
-
-		time.Sleep(5 * time.Second)
-	}
-	fmt.Println()
-
-	return hasFailure, nil
-}
-
-func showResults(runIDs []int, ctx *Context) bool {
-	allSuccess := true
-
-	for _, runID := range runIDs {
-		detail, err := getRunDetail(runID)
-		if err != nil {
-			printError(fmt.Sprintf("Could not get run details for %d", runID))
-			continue
-		}
-
-		fmt.Println("════════════════════════════════════════════════════════════════")
-		if detail.Conclusion == "success" {
-			printSuccess(fmt.Sprintf("✅ %s PASSED", detail.Name))
-		} else {
-			printError(fmt.Sprintf("❌ %s FAILED", detail.Name))
-			allSuccess = false
-		}
-		fmt.Println("════════════════════════════════════════════════════════════════")
-		fmt.Println()
-
-		printInfo("Jobs:")
-		var failedJobs []Job
-		for _, job := range detail.Jobs {
-			var icon string
-			switch job.Conclusion {
-			case "success":
-				icon = "✅"
-			case "failure":
-				icon = "❌"
-			case "skipped":
-				icon = "⏭️ "
-			default:
-				icon = "⏳"
-			}
-
-			if job.Conclusion == "failure" {
-				failedJobs = append(failedJobs, job)
-			}
-			fmt.Printf("  %s %s\n", icon, job.Name)
-		}
-		fmt.Println()
-
-		// The failure itself, not a command that would show it.
-		for _, job := range failedJobs {
-			excerpt := jobFailureLog(runID, job.DatabaseID)
-			if excerpt == "" {
-				continue
-			}
-			printError(fmt.Sprintf("❌ %s", job.Name))
-			fmt.Println(excerpt)
-			fmt.Println()
-		}
-
-		fmt.Printf("     Run:  %s\n", detail.URL)
-
-		if detail.Conclusion != "success" {
-			fmt.Println()
-			printWarn("Full logs:")
-			fmt.Printf("  gh run view %d --log-failed\n", runID)
-			fmt.Println()
-		}
-	}
-
-	printInfo("Links:")
-	fmt.Printf("  Commit:  %s\n", ctx.CommitURL)
-	if ctx.PRURL != "" {
-		fmt.Printf("      PR:  %s\n", ctx.PRURL)
-	}
-	fmt.Println()
-
-	return allSuccess
-=======
 	rootCmd.AddCommand(
 		watchCmd,
 		newRunsCmd(),
@@ -634,7 +441,6 @@ func showResults(runIDs []int, ctx *Context) bool {
 		newDispatchCmd(),
 	)
 	return rootCmd
->>>>>>> origin/master
 }
 
 // errorLineMarkers are what a runner puts in front of the line that actually
