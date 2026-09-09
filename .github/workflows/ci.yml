@@ -2,9 +2,13 @@ name: CI
 
 on:
   push:
+    branches: ['**']
   workflow_dispatch:
 
+<<<<<<< HEAD
 # go-toolchain's autorelease is default-on and needs every grant past id-token.
+=======
+>>>>>>> origin/master
 permissions:
   id-token: write
   contents: write
@@ -20,4 +24,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+<<<<<<< HEAD
       - uses: wow-look-at-my/go-toolchain@master
+=======
+
+      # Vends GO_BUILDCACHE_CONFIG, without which go-toolchain refuses to start.
+      - uses: wow-look-at-my/actions@secret-server#latest
+
+      - uses: wow-look-at-my/go-toolchain@master
+
+      - name: Install bats
+        run: sudo apt-get install -y bats
+
+      # Drives the built binary, so the shipped artifact is exercised as a user runs it.
+      - name: End-to-end tests
+        run: bats tests/
+>>>>>>> origin/master

@@ -3,13 +3,15 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"flag"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 )
 
 const (
@@ -19,6 +21,11 @@ const (
 	colorBlue   = "\033[0;34m"
 	colorReset  = "\033[0m"
 )
+
+// defaultWaitTimeout bounds every wait. An unbounded wait blocks whoever started
+// it until the run ends, which can be never: a queued job with no free runner
+// never starts. --timeout 0 restores the unbounded wait for a caller who wants it.
+const defaultWaitTimeout = 30 * time.Minute
 
 func printError(msg string) {
 	fmt.Fprintf(os.Stderr, "%sERROR: %s%s\n", colorRed, msg, colorReset)
@@ -58,6 +65,14 @@ type Job struct {
 	Name       string `json:"name"`
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
+	Steps      []Step `json:"steps"`
+}
+
+type Step struct {
+	Number     int    `json:"number"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
 }
 
 type RunDetail struct {
@@ -77,8 +92,64 @@ type RepoInfo struct {
 	NameWithOwner string `json:"nameWithOwner"`
 }
 
+type RemoteRepoInfo struct {
+	DefaultBranch string `json:"default_branch"`
+}
+
+type RemoteCommitInfo struct {
+	SHA string `json:"sha"`
+}
+
+// repoFlag holds the OWNER/REPO the --repo/-R flag named. When set, it overrides
+// repo detection and causes gh commands to target the specified repository.
+var repoFlag string
+
+// repoHost holds the HOST from a --repo written as HOST/OWNER/REPO, and is empty
+// otherwise.
+//
+// `gh api` takes a host through --hostname rather than in the path, so the two
+// are kept apart here. Leaving the host on the front of repoFlag builds
+// `repos/HOST/OWNER/REPO`, which is a path of the wrong shape and answers 404.
+var repoHost string
+
+// splitRepoTarget separates the optional leading host from OWNER/REPO.
+func splitRepoTarget(value string) (host, repo string) {
+	parts := strings.Split(value, "/")
+	if len(parts) == 3 {
+		return parts[0], parts[1] + "/" + parts[2]
+	}
+	return "", value
+}
+
+// repoTarget rebuilds what the user typed, for the `gh` subcommands that take a
+// host on -R themselves.
+func repoTarget() string {
+	if repoHost == "" {
+		return repoFlag
+	}
+	return repoHost + "/" + repoFlag
+}
+
+// ghCommand runs a gh CLI command, automatically injecting -R <repo> when repoFlag is set.
+func ghCommand(args ...string) (string, error) {
+	if repoFlag != "" {
+		args = append([]string{"-R", repoTarget()}, args...)
+	}
+	return runCommand("gh", args...)
+}
+
+// ghEnv marks a `gh` call as this tool's own. An agent environment can block the
+// raw Actions surface of `gh` to force every read through this tool; the block
+// must not then break the tool, which reaches that surface by design.
+func ghEnv() []string {
+	return append(os.Environ(), "GH_WAIT_CI=1")
+}
+
 func runCommand(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
+	if name == "gh" {
+		cmd.Env = ghEnv()
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -89,14 +160,46 @@ func runCommand(name string, args ...string) (string, error) {
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-func checkGitRepo() error {
+// findGitRepo checks if the current directory is inside a git repository.
+// If not, it searches immediate subdirectories for git repos and changes
+// into the directory if exactly one is found.
+func findGitRepo() error {
 	_, err := runCommand("git", "rev-parse", "--git-dir")
+	if err == nil {
+		return nil
+	}
+
+	// Not in a git repo — search immediate subdirectories
+	entries, err := os.ReadDir(".")
 	if err != nil {
 		return fmt.Errorf("not in a git repository")
 	}
-	return nil
+
+	var repos []string
+	for _, entry := range entries {
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		if _, statErr := os.Stat(entry.Name() + "/.git"); statErr == nil {
+			repos = append(repos, entry.Name())
+		}
+	}
+
+	switch len(repos) {
+	case 0:
+		return fmt.Errorf("not in a git repository")
+	case 1:
+		printInfo(fmt.Sprintf("Found git repository in ./%s, using it", repos[0]))
+		if err := os.Chdir(repos[0]); err != nil {
+			return fmt.Errorf("could not enter repository %s: %w", repos[0], err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("not in a git repository, found multiple repositories: %s\nPlease cd into one or use --repo/-R", strings.Join(repos, ", "))
+	}
 }
 
+<<<<<<< HEAD
 func getRepoFromRemote() (string, error) {
 	// Try to parse origin remote URL directly (preferred - avoids gh repo view picking wrong remote)
 	remoteURL, err := runCommand("git", "remote", "get-url", "origin")
@@ -130,29 +233,58 @@ func getRepoFromRemote() (string, error) {
 }
 
 func checkPushed() error {
+=======
+// checkPushed returns the commit to watch, and whether it had to fall back off
+// HEAD. A run only exists for a commit the remote has, so an unpushed HEAD has
+// none.
+//
+// The reference point is the branch's OWN remote ref, not @{u}. @{u} routinely
+// names a DIFFERENT branch -- `git checkout -B mine origin/master` leaves it on
+// master -- and reading that as "what was pushed" watches another branch's tip
+// and reports ITS result as this branch's, which is a wrong answer that looks
+// exactly like a right one.
+func checkPushed() (string, bool, error) {
+	if branch, err := runCommand("git", "branch", "--show-current"); err == nil && branch != "" {
+		ref := "refs/remotes/origin/" + branch
+		if commit, err := runCommand("git", "rev-parse", "--verify", ref); err == nil && commit != "" {
+			unpushed, err := runCommand("git", "log", ref+"..HEAD", "--oneline")
+			if err == nil && unpushed == "" {
+				return "HEAD", false, nil
+			}
+			return commit, true, nil
+		}
+	}
+
+>>>>>>> origin/master
 	unpushed, err := runCommand("git", "log", "@{u}..HEAD", "--oneline")
 	if err != nil {
-		// If there's no upstream, that's a different error - allow it
-		return nil
+		// No upstream at all: use HEAD, because the pushed state is unknowable.
+		return "HEAD", false, nil
 	}
 	if unpushed != "" {
-		printWarn("Unpushed commits detected:")
-		fmt.Println(unpushed)
-		return fmt.Errorf("push your changes first before waiting for CI")
+		upstreamCommit, err := runCommand("git", "rev-parse", "@{u}")
+		if err != nil {
+			return "", false, fmt.Errorf("could not get upstream commit: %w", err)
+		}
+		return upstreamCommit, true, nil
 	}
-	return nil
+	return "HEAD", false, nil
 }
 
-func getContext() (*Context, error) {
+func getContext(commitRef string) (*Context, error) {
 	ctx := &Context{}
 
-	commit, err := runCommand("git", "rev-parse", "HEAD")
+	if repoFlag != "" {
+		return getRemoteContext(commitRef)
+	}
+
+	commit, err := runCommand("git", "rev-parse", commitRef)
 	if err != nil {
 		return nil, fmt.Errorf("could not get commit: %w", err)
 	}
 	ctx.Commit = commit
 
-	shortCommit, err := runCommand("git", "rev-parse", "--short", "HEAD")
+	shortCommit, err := runCommand("git", "rev-parse", "--short", commitRef)
 	if err != nil {
 		return nil, fmt.Errorf("could not get short commit: %w", err)
 	}
@@ -175,15 +307,64 @@ func getContext() (*Context, error) {
 	return ctx, nil
 }
 
+// getRemoteContext builds a Context by querying the remote repository specified by repoFlag.
+// When commitRef is a specific SHA (not "HEAD"), it resolves that SHA directly via the API.
+// Otherwise it looks up the latest commit on the default branch.
+func getRemoteContext(commitRef string) (*Context, error) {
+	ctx := &Context{}
+	ctx.Repo = repoFlag
+
+	if commitRef != "" && commitRef != "HEAD" {
+		// Resolve the specific SHA via the API (handles partial SHAs)
+		var commitInfo RemoteCommitInfo
+		if err := ghAPIJSON(fmt.Sprintf("repos/%s/commits/%s", repoFlag, commitRef), &commitInfo); err != nil {
+			return nil, fmt.Errorf("could not get commit %s for %s: %w", commitRef, repoTarget(), err)
+		}
+		ctx.Commit = commitInfo.SHA
+		if len(ctx.Commit) >= 7 {
+			ctx.ShortCommit = ctx.Commit[:7]
+		} else {
+			ctx.ShortCommit = ctx.Commit
+		}
+		ctx.CommitURL = fmt.Sprintf("https://github.com/%s/commit/%s", ctx.Repo, ctx.Commit)
+		return ctx, nil
+	}
+
+	// Get the default branch of the remote repo
+	var remoteRepo RemoteRepoInfo
+	if err := ghAPIJSON(fmt.Sprintf("repos/%s", repoFlag), &remoteRepo); err != nil {
+		return nil, fmt.Errorf("could not query repository %s: %w", repoTarget(), err)
+	}
+	ctx.Branch = remoteRepo.DefaultBranch
+
+	// Get the latest commit on the default branch
+	var commitInfo RemoteCommitInfo
+	if err := ghAPIJSON(fmt.Sprintf("repos/%s/commits/%s", repoFlag, ctx.Branch), &commitInfo); err != nil {
+		return nil, fmt.Errorf("could not get latest commit for %s: %w", ctx.Branch, err)
+	}
+	ctx.Commit = commitInfo.SHA
+	if len(ctx.Commit) >= 7 {
+		ctx.ShortCommit = ctx.Commit[:7]
+	} else {
+		ctx.ShortCommit = ctx.Commit
+	}
+
+	ctx.CommitURL = fmt.Sprintf("https://github.com/%s/commit/%s", ctx.Repo, ctx.Commit)
+
+	return ctx, nil
+}
+
 func printContext(ctx *Context) {
 	printInfo(fmt.Sprintf("Repository: %s", ctx.Repo))
-	printInfo(fmt.Sprintf("Branch: %s", ctx.Branch))
+	if ctx.Branch != "" {
+		printInfo(fmt.Sprintf("Branch: %s", ctx.Branch))
+	}
 	printInfo(fmt.Sprintf("Commit: %s", ctx.ShortCommit))
 	fmt.Println()
 }
 
 func getPRInfo(ctx *Context) {
-	prJSON, err := runCommand("gh", "pr", "view", "--json", "number,url")
+	prJSON, err := ghCommand("pr", "view", "--json", "number,url")
 	if err != nil {
 		return
 	}
@@ -197,44 +378,57 @@ func getPRInfo(ctx *Context) {
 	ctx.PRURL = prInfo.URL
 }
 
-func findRuns(ctx *Context, runID string) ([]int, error) {
-	if runID != "" {
-		id, err := strconv.Atoi(runID)
-		if err != nil {
-			return nil, fmt.Errorf("invalid run ID: %s", runID)
-		}
-		printInfo(fmt.Sprintf("Watching specified run: %s", runID))
-		return []int{id}, nil
+// newRootCmd assembles the whole command tree.
+func newRootCmd() *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use:   "gh-wait-ci [run-id]",
+		Short: "Wait for GitHub Actions CI, and read or query its logs",
+		Long: "Wait for GitHub Actions CI to complete and report results.\n" +
+			"If no run-id is provided, waits for ALL runs for the current commit.\n\n" +
+			"The subcommands cover the rest of the Actions surface, so nothing here\n" +
+			"needs `gh run`:\n" +
+			"  runs         list workflow runs\n" +
+			"  view         a run's jobs, steps and timings\n" +
+			"  jobs         a run's jobs with their IDs\n" +
+			"  log          print logs, filtered by job, step or outcome\n" +
+			"  grep         search logs for a pattern\n" +
+			"  annotations  the errors and warnings that never reach the logs\n" +
+			"  checks       every check on a commit, check runs AND commit statuses\n" +
+			"  artifacts    list and download a run's artifacts\n" +
+			"  workflows    the repository's workflow definitions\n" +
+			"  dispatch     start a workflow_dispatch run\n" +
+			"  cancel       cancel a run\n" +
+			"  rerun        re-run a run, its failed jobs, or one job",
+		Args:          cobra.MaximumNArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		RunE:          run,
 	}
 
-	printInfo(fmt.Sprintf("Finding workflow runs for commit %s...", ctx.ShortCommit))
-
-	var runs []RunInfo
-	for i := 1; i <= 5; i++ {
-		runsJSON, err := runCommand("gh", "run", "list", "--commit", ctx.Commit,
-			"--json", "databaseId,status,conclusion,name", "--limit", "10")
-		if err != nil {
-			runsJSON = "[]"
-		}
-
-		if err := json.Unmarshal([]byte(runsJSON), &runs); err != nil {
-			runs = []RunInfo{}
-		}
-
-		if len(runs) > 0 {
-			break
-		}
-
-		if i < 5 {
-			printWarn(fmt.Sprintf("No runs found yet, waiting 5 seconds... (attempt %d/5)", i))
-			time.Sleep(5 * time.Second)
-		}
+	rootCmd.Flags().BoolP("fail-fast", "", false, "Exit immediately when any job fails")
+	rootCmd.PersistentFlags().StringVarP(&repoFlag, "repo", "R", "", "Target repository in [HOST/]OWNER/REPO format")
+	// Splits once, before any subcommand runs, so every repos/OWNER/REPO path and every -R agree on what was asked for.
+	rootCmd.PersistentPreRun = func(*cobra.Command, []string) {
+		repoHost, repoFlag = splitRepoTarget(repoFlag)
 	}
+	rootCmd.Flags().StringP("sha", "s", "", "Commit SHA to watch (full or partial)")
+	rootCmd.Flags().BoolP("logs", "l", false, "Stream job logs live as they run, instead of a status summary")
+	rootCmd.Flags().IntP("interval", "i", 5, "Polling interval in seconds")
+	rootCmd.Flags().Duration("timeout", defaultWaitTimeout, "Give up waiting after this long (0 waits with no limit)")
 
-	if len(runs) == 0 {
-		return nil, fmt.Errorf("no workflow runs found for commit %s", ctx.ShortCommit)
+	watchCmd := &cobra.Command{
+		Use:   "watch [run-id]",
+		Short: "Wait for CI to finish (the same thing the bare command does)",
+		Args:  cobra.MaximumNArgs(1),
+		RunE:  run,
 	}
+	watchCmd.Flags().BoolP("fail-fast", "", false, "Exit immediately when any job fails")
+	watchCmd.Flags().StringP("sha", "s", "", "Commit SHA to watch (full or partial)")
+	watchCmd.Flags().BoolP("logs", "l", false, "Stream job logs live as they run, instead of a status summary")
+	watchCmd.Flags().IntP("interval", "i", 5, "Polling interval in seconds")
+	watchCmd.Flags().Duration("timeout", defaultWaitTimeout, "Give up waiting after this long (0 waits with no limit)")
 
+<<<<<<< HEAD
 	runIDs := make([]int, len(runs))
 	printInfo(fmt.Sprintf("Found %d workflow run(s):", len(runs)))
 	for i, run := range runs {
@@ -422,6 +616,25 @@ func showResults(runIDs []int, ctx *Context) bool {
 	fmt.Println()
 
 	return allSuccess
+=======
+	rootCmd.AddCommand(
+		watchCmd,
+		newRunsCmd(),
+		newViewCmd(),
+		newJobsCmd(),
+		newLogCmd(),
+		newGrepCmd(),
+		newAnnotationsCmd(),
+		newChecksCmd(),
+		newArtifactsCmd(),
+		newWorkflowsCmd(),
+		newDispatchCmd(),
+		newCancelCmd(),
+		newRerunCmd(),
+		newDispatchCmd(),
+	)
+	return rootCmd
+>>>>>>> origin/master
 }
 
 // errorLineMarkers are what a runner puts in front of the line that actually
@@ -466,59 +679,93 @@ func jobFailureLog(runID, jobID int) string {
 }
 
 func main() {
-	failFast := flag.Bool("fail-fast", false, "Exit immediately when any job fails")
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s [options] [run-id]\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "Wait for GitHub Actions CI to complete and report results.\n")
-		fmt.Fprintf(os.Stderr, "If no run-id provided, waits for ALL runs for the current commit.\n\n")
-		fmt.Fprintf(os.Stderr, "Options:\n")
-		flag.PrintDefaults()
-	}
-	flag.Parse()
-
-	if err := checkGitRepo(); err != nil {
-		printError(err.Error())
+	if err := newRootCmd().Execute(); err != nil {
+		// A silent error carries an exit code and nothing to say: `grep` uses it
+		// to exit non-zero on no match, the way grep itself does.
+		var silent *silentError
+		if !errors.As(err, &silent) {
+			printError(err.Error())
+		}
 		os.Exit(1)
 	}
+}
 
-	if err := checkPushed(); err != nil {
-		printError(err.Error())
-		os.Exit(1)
+func run(cmd *cobra.Command, args []string) error {
+	failFast, _ := cmd.Flags().GetBool("fail-fast")
+	shaFlag, _ := cmd.Flags().GetString("sha")
+	logsFlag, _ := cmd.Flags().GetBool("logs")
+	intervalSec, _ := cmd.Flags().GetInt("interval")
+	interval := time.Duration(intervalSec) * time.Second
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	timeout, _ := cmd.Flags().GetDuration("timeout")
+	var deadline time.Time
+	if timeout > 0 {
+		deadline = time.Now().Add(timeout)
 	}
 
-	ctx, err := getContext()
+	// When --repo is not set, we need to be in a git repository.
+	// If we're not in one, try to find one in a subdirectory.
+	if repoFlag == "" {
+		if err := findGitRepo(); err != nil {
+			return err
+		}
+	}
+
+	runID := ""
+	if len(args) > 0 {
+		runID = args[0]
+	}
+
+	// Determine which commit to use
+	commitRef := "HEAD"
+	if shaFlag != "" {
+		commitRef = shaFlag
+	} else if runID == "" && repoFlag == "" {
+		// Only check for unpushed commits when auto-detecting runs from local repo
+		ref, usedUpstream, err := checkPushed()
+		if err != nil {
+			return err
+		}
+		if usedUpstream {
+			printWarn("Warning: You have unpushed commits. Watching the latest pushed commit instead.")
+			fmt.Println()
+		}
+		commitRef = ref
+	}
+
+	ctx, err := getContext(commitRef)
 	if err != nil {
-		printError(err.Error())
-		os.Exit(1)
+		return err
 	}
 
 	printContext(ctx)
 	getPRInfo(ctx)
 
-	runID := ""
-	if flag.NArg() > 0 {
-		runID = flag.Arg(0)
-	}
-
 	runIDs, err := findRuns(ctx, runID)
 	if err != nil {
-		printError(err.Error())
-		os.Exit(1)
+		return err
 	}
 
-	failFastMode := *failFast
-	hasFailure, err := waitForRuns(runIDs, failFastMode)
+	var hasFailure bool
+	if logsFlag {
+		hasFailure, err = streamLogs(runIDs, ctx, failFast, interval, deadline)
+	} else {
+		hasFailure, err = waitForRuns(runIDs, failFast, interval, deadline)
+	}
 	if err != nil {
-		printError(err.Error())
-		os.Exit(1)
+		return err
 	}
 
-	if failFastMode && hasFailure {
+	if failFast && hasFailure {
 		showResults(runIDs, ctx)
-		os.Exit(1)
+		return fmt.Errorf("CI failed")
 	}
 
 	if !showResults(runIDs, ctx) {
-		os.Exit(1)
+		return fmt.Errorf("CI failed")
 	}
+
+	return nil
 }
