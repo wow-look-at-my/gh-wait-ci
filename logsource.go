@@ -65,6 +65,16 @@ func fetchJobLogText(repo string, jobID int64) (string, error) {
 	return string(out), nil
 }
 
+// isNotFound reports whether an error from ghAPIBytes is GitHub answering 404.
+//
+// That is the ordinary answer for a log GitHub has not written out yet: a job
+// reads as finished before its blob lands, and the storage layer answers
+// BlobNotFound until it does. Matching the text is what there is to match --
+// ghAPIBytes wraps `gh`'s stderr, and gh reports the status that way.
+func isNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "HTTP 404")
+}
+
 // splitLines splits a log body into lines without inventing a trailing empty one.
 func splitLines(body string) []string {
 	body = strings.TrimSuffix(body, "\n")
@@ -354,9 +364,22 @@ func collectSections(repo string, runID int64, jobs []apiJob, opt collectOptions
 		// has its own downloadable log, so read those instead. Those logs carry
 		// step boundaries too, as BOMs, so a run in progress still answers
 		// --step and --failed rather than dumping the whole job.
+		// has its own downloadable log, so read those instead.
+		//
+		// A 404 here is the ordinary answer for a log GitHub has not written
+		// out yet, and the caller reports that. Anything else is a real
+		// failure -- no credential, no network, a 500 -- and reporting it as
+		// "not available yet" sends the reader off to wait for a log that was
+		// never coming.
 		for _, j := range selected {
 			body, err := fetchJobLogText(repo, j.ID)
-			if err != nil || strings.TrimSpace(body) == "" {
+			if err != nil {
+				if isNotFound(err) {
+					continue
+				}
+				return nil, false, fmt.Errorf("could not read the log of job %q (%d): %w", j.Name, j.ID, err)
+			}
+			if strings.TrimSpace(body) == "" {
 				continue
 			}
 			lines := splitLines(body)

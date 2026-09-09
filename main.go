@@ -100,14 +100,40 @@ type RemoteCommitInfo struct {
 	SHA string `json:"sha"`
 }
 
-// repoFlag holds the --repo/-R flag value. When set, it overrides repo detection
-// and causes gh commands to target the specified repository.
+// repoFlag holds the OWNER/REPO the --repo/-R flag named. When set, it overrides
+// repo detection and causes gh commands to target the specified repository.
 var repoFlag string
+
+// repoHost holds the HOST from a --repo written as HOST/OWNER/REPO, and is empty
+// otherwise.
+//
+// `gh api` takes a host through --hostname rather than in the path, so the two
+// are kept apart here. Leaving the host on the front of repoFlag builds
+// `repos/HOST/OWNER/REPO`, which is a path of the wrong shape and answers 404.
+var repoHost string
+
+// splitRepoTarget separates the optional leading host from OWNER/REPO.
+func splitRepoTarget(value string) (host, repo string) {
+	parts := strings.Split(value, "/")
+	if len(parts) == 3 {
+		return parts[0], parts[1] + "/" + parts[2]
+	}
+	return "", value
+}
+
+// repoTarget rebuilds what the user typed, for the `gh` subcommands that take a
+// host on -R themselves.
+func repoTarget() string {
+	if repoHost == "" {
+		return repoFlag
+	}
+	return repoHost + "/" + repoFlag
+}
 
 // ghCommand runs a gh CLI command, automatically injecting -R <repo> when repoFlag is set.
 func ghCommand(args ...string) (string, error) {
 	if repoFlag != "" {
-		args = append([]string{"-R", repoFlag}, args...)
+		args = append([]string{"-R", repoTarget()}, args...)
 	}
 	return runCommand("gh", args...)
 }
@@ -173,17 +199,33 @@ func findGitRepo() error {
 	}
 }
 
-// checkPushed checks if there are unpushed commits. Returns the commit to use
-// (either HEAD if all pushed, or the upstream commit if unpushed commits exist)
-// and a boolean indicating if we fell back to the upstream commit.
+// checkPushed returns the commit to watch, and whether it had to fall back off
+// HEAD. A run only exists for a commit the remote has, so an unpushed HEAD has
+// none.
+//
+// The reference point is the branch's OWN remote ref, not @{u}. @{u} routinely
+// names a DIFFERENT branch -- `git checkout -B mine origin/master` leaves it on
+// master -- and reading that as "what was pushed" watches another branch's tip
+// and reports ITS result as this branch's, which is a wrong answer that looks
+// exactly like a right one.
 func checkPushed() (string, bool, error) {
+	if branch, err := runCommand("git", "branch", "--show-current"); err == nil && branch != "" {
+		ref := "refs/remotes/origin/" + branch
+		if commit, err := runCommand("git", "rev-parse", "--verify", ref); err == nil && commit != "" {
+			unpushed, err := runCommand("git", "log", ref+"..HEAD", "--oneline")
+			if err == nil && unpushed == "" {
+				return "HEAD", false, nil
+			}
+			return commit, true, nil
+		}
+	}
+
 	unpushed, err := runCommand("git", "log", "@{u}..HEAD", "--oneline")
 	if err != nil {
-		// If there's no upstream, use HEAD (can't determine pushed state)
+		// No upstream at all: use HEAD, because the pushed state is unknowable.
 		return "HEAD", false, nil
 	}
 	if unpushed != "" {
-		// Get the upstream commit to use instead
 		upstreamCommit, err := runCommand("git", "rev-parse", "@{u}")
 		if err != nil {
 			return "", false, fmt.Errorf("could not get upstream commit: %w", err)
@@ -243,14 +285,9 @@ func getRemoteContext(commitRef string) (*Context, error) {
 
 	if commitRef != "" && commitRef != "HEAD" {
 		// Resolve the specific SHA via the API (handles partial SHAs)
-		commitJSON, err := runCommand("gh", "api", fmt.Sprintf("repos/%s/commits/%s", repoFlag, commitRef))
-		if err != nil {
-			return nil, fmt.Errorf("could not get commit %s for %s: %w", commitRef, repoFlag, err)
-		}
-
 		var commitInfo RemoteCommitInfo
-		if err := json.Unmarshal([]byte(commitJSON), &commitInfo); err != nil {
-			return nil, fmt.Errorf("could not parse commit info: %w", err)
+		if err := ghAPIJSON(fmt.Sprintf("repos/%s/commits/%s", repoFlag, commitRef), &commitInfo); err != nil {
+			return nil, fmt.Errorf("could not get commit %s for %s: %w", commitRef, repoTarget(), err)
 		}
 		ctx.Commit = commitInfo.SHA
 		if len(ctx.Commit) >= 7 {
@@ -263,26 +300,16 @@ func getRemoteContext(commitRef string) (*Context, error) {
 	}
 
 	// Get the default branch of the remote repo
-	repoJSON, err := runCommand("gh", "api", fmt.Sprintf("repos/%s", repoFlag))
-	if err != nil {
-		return nil, fmt.Errorf("could not query repository %s: %w", repoFlag, err)
-	}
-
 	var remoteRepo RemoteRepoInfo
-	if err := json.Unmarshal([]byte(repoJSON), &remoteRepo); err != nil {
-		return nil, fmt.Errorf("could not parse repo info: %w", err)
+	if err := ghAPIJSON(fmt.Sprintf("repos/%s", repoFlag), &remoteRepo); err != nil {
+		return nil, fmt.Errorf("could not query repository %s: %w", repoTarget(), err)
 	}
 	ctx.Branch = remoteRepo.DefaultBranch
 
 	// Get the latest commit on the default branch
-	commitJSON, err := runCommand("gh", "api", fmt.Sprintf("repos/%s/commits/%s", repoFlag, ctx.Branch))
-	if err != nil {
-		return nil, fmt.Errorf("could not get latest commit for %s: %w", ctx.Branch, err)
-	}
-
 	var commitInfo RemoteCommitInfo
-	if err := json.Unmarshal([]byte(commitJSON), &commitInfo); err != nil {
-		return nil, fmt.Errorf("could not parse commit info: %w", err)
+	if err := ghAPIJSON(fmt.Sprintf("repos/%s/commits/%s", repoFlag, ctx.Branch), &commitInfo); err != nil {
+		return nil, fmt.Errorf("could not get latest commit for %s: %w", ctx.Branch, err)
 	}
 	ctx.Commit = commitInfo.SHA
 	if len(ctx.Commit) >= 7 {
@@ -349,6 +376,10 @@ func newRootCmd() *cobra.Command {
 
 	rootCmd.Flags().BoolP("fail-fast", "", false, "Exit immediately when any job fails")
 	rootCmd.PersistentFlags().StringVarP(&repoFlag, "repo", "R", "", "Target repository in [HOST/]OWNER/REPO format")
+	// Splits once, before any subcommand runs, so every repos/OWNER/REPO path and every -R agree on what was asked for.
+	rootCmd.PersistentPreRun = func(*cobra.Command, []string) {
+		repoHost, repoFlag = splitRepoTarget(repoFlag)
+	}
 	rootCmd.Flags().StringP("sha", "s", "", "Commit SHA to watch (full or partial)")
 	rootCmd.Flags().BoolP("logs", "l", false, "Stream job logs live as they run, instead of a status summary")
 	rootCmd.Flags().IntP("interval", "i", 5, "Polling interval in seconds")
@@ -380,6 +411,7 @@ func newRootCmd() *cobra.Command {
 		newDispatchCmd(),
 		newCancelCmd(),
 		newRerunCmd(),
+		newDispatchCmd(),
 	)
 	return rootCmd
 }
