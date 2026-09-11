@@ -21,10 +21,14 @@ func findRuns(ctx *Context, runID string) ([]int, error) {
 	printInfo(fmt.Sprintf("Finding workflow runs for commit %s...", ctx.ShortCommit))
 
 	var runs []RunInfo
+	// A listing that fails is not a repository with no runs in it. Keeping the
+	// cause turns "no workflow runs found" back into what actually went wrong.
+	var lastErr error
 	for i := 1; i <= 5; i++ {
 		runsJSON, err := ghCommand("run", "list", "--commit", ctx.Commit,
 			"--json", "databaseId,status,conclusion,name", "--limit", "10")
 		if err != nil {
+			lastErr = err
 			runsJSON = "[]"
 		}
 
@@ -43,6 +47,10 @@ func findRuns(ctx *Context, runID string) ([]int, error) {
 	}
 
 	if len(runs) == 0 {
+		if lastErr != nil {
+			return nil, fmt.Errorf("could not list workflow runs for commit %s: %w",
+				ctx.ShortCommit, lastErr)
+		}
 		return nil, fmt.Errorf("no workflow runs found for commit %s", ctx.ShortCommit)
 	}
 
@@ -56,6 +64,14 @@ func findRuns(ctx *Context, runID string) ([]int, error) {
 
 	return runIDs, nil
 }
+
+// How many consecutive failed reads of one run earn a warning, and how many
+// end the wait. The wait is generous, because a transient refusal is common
+// and the deadline is the real backstop.
+const (
+	pollWarnAfter   = 3
+	pollGiveUpAfter = 20
+)
 
 // checkDeadline stops a wait that has run out of time. A zero deadline never
 // expires. The error names a run so the caller reads the state it never reached.
@@ -96,6 +112,10 @@ func waitForRuns(runIDs []int, failFast bool, interval time.Duration, deadline t
 	lastState := ""
 	firstPrint := true
 	hasFailure := false
+	// A read that keeps failing is not a run that is still going. Counting the
+	// consecutive failures is what tells those apart, so a wait says why it is
+	// getting nowhere instead of spinning in silence until the deadline.
+	pollFails := map[int]int{}
 
 	for {
 		allDone := true
@@ -108,7 +128,22 @@ func waitForRuns(runIDs []int, failFast bool, interval time.Duration, deadline t
 			detail, err := getRunDetail(runID)
 			if err != nil {
 				allDone = false
+				pollFails[runID]++
+				switch {
+				case pollFails[runID] == pollWarnAfter:
+					printWarn(fmt.Sprintf("run %d is not answering: %v", runID, err))
+				case pollFails[runID] >= pollGiveUpAfter:
+					return hasFailure, fmt.Errorf(
+						"gave up reading run %d after %d consecutive failed reads: %w\n"+
+							"The wait was failing to READ the run, not waiting on CI. "+
+							"Check the run with:\n  gh wait-ci view %d",
+						runID, pollFails[runID], err, runID)
+				}
 				continue
+			}
+			if pollFails[runID] > 0 {
+				printInfo(fmt.Sprintf("run %d is answering again", runID))
+				delete(pollFails, runID)
 			}
 
 			for _, job := range detail.Jobs {
