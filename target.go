@@ -32,6 +32,15 @@ func resolveRepo() (string, error) {
 	if err := findGitRepo(); err != nil {
 		return "", fmt.Errorf("%w (or pass --repo OWNER/REPO)", err)
 	}
+	// The remote answers before gh does. gh refuses to name the repository at
+	// all when GH_HOST points at a mirror that no remote URL carries, and it
+	// says so as "none of the git remotes ... correspond to the GH_HOST
+	// environment variable". That makes every subcommand unusable without
+	// --repo in a mirrored environment. A remote URL cannot disagree with
+	// itself, so it is the better source.
+	if repo, err := repoFromGitRemote(); err == nil {
+		return repo, nil
+	}
 	out, err := runCommand("gh", "repo", "view", "--json", "nameWithOwner")
 	if err != nil {
 		return "", fmt.Errorf("could not determine the GitHub repository: %w", err)
@@ -41,6 +50,67 @@ func resolveRepo() (string, error) {
 		return "", fmt.Errorf("could not parse the repository name: %w", err)
 	}
 	return info.NameWithOwner, nil
+}
+
+// repoFromGitRemote reads OWNER/REPO off this checkout's remotes, preferring
+// origin. It asks git rather than gh, so no host setting can refuse it.
+func repoFromGitRemote() (string, error) {
+	names := []string{"origin"}
+	if out, err := runCommand("git", "remote"); err == nil {
+		for _, n := range strings.Fields(out) {
+			if n != "origin" {
+				names = append(names, n)
+			}
+		}
+	}
+	for _, name := range names {
+		out, err := runCommand("git", "remote", "get-url", name)
+		if err != nil {
+			continue
+		}
+		if repo := parseRemoteRepo(out); repo != "" {
+			return repo, nil
+		}
+	}
+	return "", fmt.Errorf("no git remote carries an OWNER/REPO path")
+}
+
+// parseRemoteRepo takes OWNER/REPO off a remote URL. The last two path
+// segments carry it in every spelling git accepts: the https form, the
+// scp-like form, and a proxy URL that prefixes a path of its own. An owner is
+// letters, digits and hyphens, which is what tells that pair apart from a
+// trailing host plus owner on a URL naming no repository.
+func parseRemoteRepo(remote string) string {
+	s := strings.TrimSpace(remote)
+	s = strings.TrimSuffix(s, "/")
+	s = strings.TrimSuffix(s, ".git")
+	// A colon separates host from path in the scp-like form, and port from host
+	// elsewhere. Either way the trailing pair is unaffected.
+	parts := strings.FieldsFunc(s, func(r rune) bool { return r == '/' || r == ':' })
+	if len(parts) < 2 {
+		return ""
+	}
+	owner, repo := parts[len(parts)-2], parts[len(parts)-1]
+	if repo == "" || !isOwnerName(owner) {
+		return ""
+	}
+	return owner + "/" + repo
+}
+
+// isOwnerName reports whether s spells a GitHub account: letters, digits and
+// hyphens, nothing else. A host name carries a dot and fails here.
+func isOwnerName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // resolveCommit returns the commit a run lookup should use, or "" when the
